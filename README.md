@@ -137,20 +137,7 @@ Each file below is listed **once** with its responsibility stated **inline**, so
 
 ---
 
-mech390-crank-slider-ml/
-├─ README.md
-├─ TECHNICAL_SPEC.md
-├─ pyproject.toml
-├─ configs/
-│  ├─ generate/
-│  ├─ train/
-│  └─ optimize/
-├─ src/
-│  └─ mech390/
-├─ scripts/
-├─ data/
-├─ reports/
-└─ tests/
+![Screenshot](assets/filepath.jpg)
 
 ## File and Directory Responsibilities
 
