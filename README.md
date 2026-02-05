@@ -131,3 +131,79 @@ All training data is generated using physics-based equations.
 ⸻
 
 
+# Repository File Tree and Responsibilities (Authoritative)
+
+Each file below is listed **once** with its responsibility stated **inline**, so an AI agent or developer can immediately understand scope, ownership, and behavior.
+
+---
+
+mech390-crank-slider-ml/                         # Project root
+
+├─ README.md                                     # Human-readable project overview (mechanical focus, minimal code)
+├─ TECHNICAL_SPEC.md                             # Authoritative technical contract (equations, constraints, pipeline)
+├─ pyproject.toml / requirements.txt             # Python dependencies and environment definition
+├─ .gitignore                                    # Excludes generated data, models, caches, reports
+
+├─ configs/                                      # Experiment definitions (NO code logic)
+│  ├─ generate/                                 # Data generation experiment recipes
+│  │  ├─ baseline.yaml                          # Standard geometry ranges, balanced pass/fail distribution
+│  │  └─ aggressive.yaml                        # Edge-of-feasibility sampling to populate failure boundary
+│  ├─ train/                                    # ML training configurations
+│  │  ├─ regression.yaml                        # Train regression model (stress / utilization prediction)
+│  │  └─ classifier.yaml                        # Train classifier (pass/fail prediction)
+│  └─ optimize/                                 # ML-based evaluation / optimization configs
+│     └─ search.yaml                            # Defines design space and optimization objective
+
+├─ src/                                         # All reusable, deterministic source code
+│  └─ mech390/                                  # Top-level Python package
+│     ├─ init.py                            # Package initializer
+│
+│     ├─ common/                                # Shared utilities (no physics)
+│     │  ├─ io.py                               # Centralized I/O (CSV/YAML/JSON, run folders, logging)
+│     │  ├─ schema.py                           # Dataset column definitions and validation rules
+│     │  └─ utils.py                            # General helpers (units, checks, formatting)
+│
+│     ├─ physics/                               # Physics layer (fully deterministic)
+│     │  ├─ kinematics.py                       # All position/velocity/acceleration equations, ROM, QRR, dead centers
+│     │  ├─ dynamics.py                         # Newton–Euler equations, joint reaction forces
+│     │  ├─ stresses.py                         # Normal and shear stress calculations from forces and geometry
+│     │  └─ engine.py                           # 15° crank sweep, aggregation of peak stresses
+│
+│     ├─ datagen/                               # Data generation pipeline
+│     │  ├─ sampling.py                         # Random / LHS sampling, seed control, no physics
+│     │  ├─ stage1_kinematic.py                 # Stage 1: 2D kinematic synthesis (ROM + QRR enforcement)
+│     │  ├─ stage2_embodiment.py                # Stage 2: 3D geometry, mass, inertia generation
+│     │  └─ generate.py                         # End-to-end dataset generation orchestration
+│
+│     ├─ ml/                                    # Machine learning layer
+│     │  ├─ features.py                         # Feature selection, scaling, normalization
+│     │  ├─ models.py                           # ML model architectures (NNs, classifiers)
+│     │  ├─ train.py                            # Training loops, losses, metrics, checkpoints
+│     │  └─ infer.py                            # Model loading and prediction utilities
+│
+│     └─ optimize/                              # Design space exploration
+│        ├─ objective.py                        # Optimization objective using ML predictions
+│        └─ search.py                           # Search strategies (random, heuristic, etc.)
+
+├─ scripts/                                     # Thin command-line entry points
+│  ├─ generate_dataset.py                       # Runs full data generation from a YAML config
+│  ├─ train_model.py                            # Trains ML models from prepared datasets
+│  └─ optimize_config.py                        # Uses ML to evaluate or optimize new designs
+
+├─ data/                                        # Generated artifacts only (never hand-edited)
+│  ├─ raw/                                     # Raw datasets (all cases, pass-only, metadata)
+│  ├─ processed/                               # Cleaned / feature-engineered datasets
+│  ├─ models/                                  # Saved ML models, scalers, training metadata
+│  └─ splits/                                  # Train/validation/test splits or indices
+
+├─ reports/                                     # Generated summaries and diagnostics
+│  ├─ data_generation/                          # ROM/QRR acceptance rates, stress distributions
+│  ├─ training/                                 # Learning curves, evaluation metrics
+│  └─ optimization/                             # Optimization and search results
+
+└─ tests/                                       # Validation and regression tests
+├─ test_kinematics.py                        # Unit tests for kinematics, ROM, QRR
+├─ test_stresses.py                          # Unit tests for stress calculations
+└─ test_pipeline_smoke.py                    # End-to-end pipeline sanity test
+
+---
