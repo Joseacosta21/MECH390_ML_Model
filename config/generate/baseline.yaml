@@ -1,0 +1,32 @@
+random_seed: 42
+
+geometry:
+  r: {min: 0.03, max: 0.08}        # crank length (m)
+  l: {min: 0.12, max: 0.40}        # rod length (m)
+  D: {min: 0.00, max: 0.05}        # offset (m)
+
+operating:
+  RPM: 30
+  P: .5           # load (kg)
+  mu: 0.2 # COF
+
+sampling:
+  method: latin_hypercube          # latin_hypercube | random | grid
+  n_samples: 200000                # ignored for grid
+  constraints:
+    - "l >= 2.5*r"                 # avoid crazy rod ratios
+    - "r > 0"
+    - "l > 0"
+
+sweep:
+  theta_step_deg: 15               # fixed per your requirement
+
+limits:
+  sigma_allow: 180e6               # Pa
+  tau_allow: 100e6                 # Pa
+  safety_factor: 1.0               # set 1.2 etc if you want margin
+
+output:
+  csv_all: "all_cases.csv"
+  csv_pass: "train_pass.csv"
+  store_theta_at_max: true
