@@ -11,11 +11,19 @@ import logging
 from mech390.physics import kinematics
 from mech390.datagen import sampling
 
+from mech390.config import get_baseline_config
+
 # Set up logger
 logger = logging.getLogger(__name__)
 
-def solve_for_r_given_rom(l: float, e: float, target_rom: float, 
-                          r_min: float = 0.01, r_max: float = 1.0, 
+# Load baseline config for defaults
+BASELINE_CONFIG = get_baseline_config()
+DEFAULT_ROM = BASELINE_CONFIG['operating']['ROM']
+R_MIN = BASELINE_CONFIG['geometry']['r']['min']
+R_MAX = BASELINE_CONFIG['geometry']['r']['max']
+
+def solve_for_r_given_rom(l: float, e: float, target_rom: float = DEFAULT_ROM, 
+                          r_min: float = R_MIN, r_max: float = R_MAX, 
                           tol: float = 1e-4) -> Optional[float]:
     """
     Numerically solves for crank radius r that gives the target ROM,
