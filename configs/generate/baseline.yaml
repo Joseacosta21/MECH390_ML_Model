@@ -6,7 +6,7 @@ material:        # Young's modulus (Pa)
   yield_shear_stress: {min: 100e6, max: 100e6}
 
 geometry:
-  r: {min: 0.03, max: 1}        # crank length (m)
+  r: {min: 0.08, max: 1}        # crank length (m)
   l: {min: 0.12, max: 1}        # rod length (m)
   e: {min: 0.00, max: 1}        # offset (m)
   slider:
