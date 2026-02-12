@@ -222,7 +222,12 @@ def calculate_metrics(r: float, l: float, D: float) -> dict:
          # Max of (r*sin(theta)+D)^2 is (r + |D|)^2.
          # So l^2 >= (r+|D|)^2  =>  l >= r + |D|.
          # Strictly greater for non-locking behavior usually.
-         pass
+        # Valid crank-slider constraint: l must be long enough to reach.
+        # Strict inequality l > r + |D| ensures full rotation without locking
+        # as the term under sqrt in x(theta) must be non-negative for all theta.
+        # Max value of (r*sin(theta) + D)^2 is (r + |D|)^2.
+        # So we need l^2 > (r + |D|)^2  =>  l > r + |D|.
+        return {'valid': False, 'reason': f"Rod too short for full rotation: l={l}, r={r}, D={D} (needs l > {r + abs(D)})"}
 
     # 2. Find dead centers
     roots = get_dead_center_angles(r, l, D)
