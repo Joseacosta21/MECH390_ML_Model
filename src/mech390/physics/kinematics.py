@@ -10,18 +10,18 @@ import numpy as np
 from scipy.optimize import brentq
 
 
-def slider_position(theta: float, r: float, l: float, D: float) -> float:
+def slider_position(theta: float, r: float, l: float, e: float) -> float:
     """
     Calculates the slider position x_C(theta).
 
     Equation:
-        x_C(theta) = r * cos(theta) + sqrt(l^2 - (r * sin(theta) + D)^2)
+        x_C(theta) = r * cos(theta) + sqrt(l^2 - (r * sin(theta) + e)^2)
 
     Args:
         theta (float): Crank angle in radians.
         r (float): Crank radius.
         l (float): Connecting rod length.
-        D (float): Offset vertical distance.
+        e (float): Offset vertical distance.
 
     Returns:
         float: Slider position x_C.
@@ -29,13 +29,13 @@ def slider_position(theta: float, r: float, l: float, D: float) -> float:
     Raises:
         ValueError: If geometrical constraints are violated (term under sqrt < 0).
     """
-    term_under_sqrt = l**2 - (r * np.sin(theta) + D)**2
+    term_under_sqrt = l**2 - (r * np.sin(theta) + e)**2
     
     # Check for physical validity; floating point issues might cause slightly negative numbers for exact limits
     if np.any(term_under_sqrt < 0):
         # If it's a scalar check
         if np.isscalar(term_under_sqrt):
-             raise ValueError(f"Geometry violation: l={l}, r={r}, D={D}, theta={theta}. Term under sqrt {term_under_sqrt} is negative.")
+             raise ValueError(f"Geometry violation: l={l}, r={r}, e={e}, theta={theta}. Term under sqrt {term_under_sqrt} is negative.")
         else:
              # For arrays, we let it produce nans or handle it, but per spec this function might be called with scalars mostly.
              # If arrays are passed, we shouldn't raise immediately unless we want to fail fast.
@@ -46,7 +46,7 @@ def slider_position(theta: float, r: float, l: float, D: float) -> float:
     return r * np.cos(theta) + np.sqrt(term_under_sqrt)
 
 
-def slider_velocity(theta: float, omega: float, r: float, l: float, D: float) -> float:
+def slider_velocity(theta: float, omega: float, r: float, l: float, e: float) -> float:
     """
     Calculates the slider linear velocity v_C.
 
@@ -57,21 +57,21 @@ def slider_velocity(theta: float, omega: float, r: float, l: float, D: float) ->
         omega (float): Angular velocity in rad/s.
         r (float): Crank radius.
         l (float): Connecting rod length.
-        D (float): Offset.
+        e (float): Offset.
 
     Returns:
         float: Slider velocity.
     """
-    sq_term = np.sqrt(l**2 - (r * np.sin(theta) + D)**2)
+    sq_term = np.sqrt(l**2 - (r * np.sin(theta) + e)**2)
     # Derivative of x_C w.r.t theta:
-    # dx/dtheta = -r*sin(theta) + (1/(2*sqrt(...))) * (-2 * (r*sin(theta)+D) * r*cos(theta))
-    #           = -r*sin(theta) - (r*cos(theta)*(r*sin(theta) + D)) / sqrt(...)
+    # dx/dtheta = -r*sin(theta) + (1/(2*sqrt(...))) * (-2 * (r*sin(theta)+e) * r*cos(theta))
+    #           = -r*sin(theta) - (r*cos(theta)*(r*sin(theta) + e)) / sqrt(...)
     
-    dx_dtheta = -r * np.sin(theta) - (r * np.cos(theta) * (r * np.sin(theta) + D)) / sq_term
+    dx_dtheta = -r * np.sin(theta) - (r * np.cos(theta) * (r * np.sin(theta) + e)) / sq_term
     return dx_dtheta * omega
 
 
-def slider_acceleration(theta: float, omega: float, r: float, l: float, D: float) -> float:
+def slider_acceleration(theta: float, omega: float, r: float, l: float, e: float) -> float:
     """
     Calculates the slider linear acceleration a_C.
     Assumes constant omega (alpha = 0).
@@ -83,12 +83,12 @@ def slider_acceleration(theta: float, omega: float, r: float, l: float, D: float
         omega (float): Angular velocity in rad/s.
         r (float): Crank radius.
         l (float): Connecting rod length.
-        D (float): Offset.
+        e (float): Offset.
 
     Returns:
         float: Slider acceleration.
     """
-    # Let u = r*sin(theta) + D
+    # Let u = r*sin(theta) + e
     # Let S = sqrt(l^2 - u^2)
     # x = r*cos(theta) + S
     # dx/dtheta = -r*sin(theta) - (r*cos(theta)*u)/S
@@ -98,7 +98,7 @@ def slider_acceleration(theta: float, omega: float, r: float, l: float, D: float
     # Term 2: d( (r*cos(theta)*u) / S )
     # quotient rule: (S * d(numerator) - numerator * d(S)) / S^2
     
-    # u = r*sin(theta) + D  => du/dtheta = r*cos(theta)
+    # u = r*sin(theta) + e  => du/dtheta = r*cos(theta)
     # S = (l^2 - u^2)^0.5   => dS/dtheta = 0.5*(l^2-u^2)^(-0.5) * (-2u * du/dtheta) = -u/S * r*cos(theta)
     
     # Numerator N = r*cos(theta)*u
@@ -110,7 +110,7 @@ def slider_acceleration(theta: float, omega: float, r: float, l: float, D: float
     
     sin_t = np.sin(theta)
     cos_t = np.cos(theta)
-    u = r * sin_t + D
+    u = r * sin_t + e
     S = np.sqrt(l**2 - u**2)
     
     term1 = -r * cos_t
@@ -126,16 +126,16 @@ def slider_acceleration(theta: float, omega: float, r: float, l: float, D: float
     return d2x_dtheta2 * (omega**2)
 
 
-def get_dead_center_angles(r: float, l: float, D: float):
+def get_dead_center_angles(r: float, l: float, e: float):
     """
     Finds the two crank angles where slider velocity is zero (dead centers).
     Uses robust root-finding as required by specs.
     
     Velocity is zero when dx/dtheta is zero.
-    Equation: -r*sin(theta) - (r*cos(theta)*(r*sin(theta)+D)) / sqrt(...) = 0
+    Equation: -r*sin(theta) - (r*cos(theta)*(r*sin(theta)+e)) / sqrt(...) = 0
     
     Arguments:
-        r, l, D: geometric parameters
+        r, l, e: geometric parameters
         
     Returns:
         tuple: (theta_retracted, theta_extended) in range [0, 2pi), sorted.
@@ -145,10 +145,10 @@ def get_dead_center_angles(r: float, l: float, D: float):
     def velocity_proxy(theta):
         # Computes dx/dtheta (proportional to velocity)
         # We handle domain errors inside by returning NaN or checking bounds
-        if abs(r * np.sin(theta) + D) >= l:
+        if abs(r * np.sin(theta) + e) >= l:
              # Invalid position physically
              return np.nan
-        val = slider_velocity(theta, 1.0, r, l, D)
+        val = slider_velocity(theta, 1.0, r, l, e)
         return val
 
     # We expect two roots in [0, 2pi).
@@ -199,12 +199,12 @@ def get_dead_center_angles(r: float, l: float, D: float):
     return np.sort(roots)
 
 
-def calculate_metrics(r: float, l: float, D: float) -> dict:
+def calculate_metrics(r: float, l: float, e: float) -> dict:
     """
     Computes ROM and QRR for the given geometry.
 
     Args:
-        r, l, D: Geometry.
+        r, l, e: Geometry.
 
     Returns:
         dict: {'ROM': float, 'QRR': float, 'theta_min': float, 'theta_max': float}
@@ -212,25 +212,25 @@ def calculate_metrics(r: float, l: float, D: float) -> dict:
     """
     
     # 1. Validate basic existence
-    if l <= r + abs(D):
+    if l <= r + abs(e):
          # Valid crank-slider constraint: l must be long enough to reach.
-         # Actually more strict: l > r + D for full rotation?
+         # Actually more strict: l > r + e for full rotation?
          # For full rotation (Grashof condition for slider-crank):
          # The crank must be the shortest link relative to ground offset?
-         # Specifically: l must be > r + |D| ensures full rotation without locking?
-         # Let's check the sqrt term: l^2 - (r*sin(theta)+D)^2 >= 0 for all theta
-         # Max of (r*sin(theta)+D)^2 is (r + |D|)^2.
-         # So l^2 >= (r+|D|)^2  =>  l >= r + |D|.
+         # Specifically: l must be > r + |e| ensures full rotation without locking?
+         # Let's check the sqrt term: l^2 - (r*sin(theta)+e)^2 >= 0 for all theta
+         # Max of (r*sin(theta)+e)^2 is (r + |e|)^2.
+         # So l^2 >= (r+|e|)^2  =>  l >= r + |e|.
          # Strictly greater for non-locking behavior usually.
         # Valid crank-slider constraint: l must be long enough to reach.
-        # Strict inequality l > r + |D| ensures full rotation without locking
+        # Strict inequality l > r + |e| ensures full rotation without locking
         # as the term under sqrt in x(theta) must be non-negative for all theta.
-        # Max value of (r*sin(theta) + D)^2 is (r + |D|)^2.
-        # So we need l^2 > (r + |D|)^2  =>  l > r + |D|.
-        return {'valid': False, 'reason': f"Rod too short for full rotation: l={l}, r={r}, D={D} (needs l > {r + abs(D)})"}
+        # Max value of (r*sin(theta) + e)^2 is (r + |e|)^2.
+        # So we need l^2 > (r + |e|)^2  =>  l > r + |e|.
+        return {'valid': False, 'reason': f"Rod too short for full rotation: l={l}, r={r}, e={e} (needs l > {r + abs(e)})"}
 
     # 2. Find dead centers
-    roots = get_dead_center_angles(r, l, D)
+    roots = get_dead_center_angles(r, l, e)
     
     if len(roots) < 2:
          return {'valid': False, 'reason': 'Cannot find 2 dead centers'}
@@ -238,8 +238,8 @@ def calculate_metrics(r: float, l: float, D: float) -> dict:
     theta1, theta2 = roots[0], roots[1]
     
     # Calculate positions
-    x1 = slider_position(theta1, r, l, D)
-    x2 = slider_position(theta2, r, l, D)
+    x1 = slider_position(theta1, r, l, e)
+    x2 = slider_position(theta2, r, l, e)
     
     # Determine which is Extended (max x) and Retracted (min x)
     if x1 > x2:
