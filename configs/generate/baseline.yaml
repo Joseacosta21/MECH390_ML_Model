@@ -21,6 +21,7 @@ operating:
   mu: 0.2 # COF
   ROM: .25 # range of motion (mm)
   QRR: {min: 1.5, max: 2.5} # quick return ratio
+  TotalCycles: 18720000 # 5 years of operation at 30 RPM 
 
 sampling:
   method: latin_hypercube          # latin_hypercube | random | grid
