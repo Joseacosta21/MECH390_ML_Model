@@ -1,0 +1,1 @@
+# This file will calculate the center of gravity and mass moment of inertia of the links. 

@@ -1,0 +1,1 @@
+from mech390.ml import infer
