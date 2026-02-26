@@ -1,5 +1,7 @@
 # FULL TECHNICAL SPECIFICATION AND REPOSITORY CONTRACT  
+
 ## Offset Crank–Slider Data Generation, Simulation, and ML System  
+
 **Audience:** Coding AI agents, automation systems, advanced developers  
 **Goal:** Enable full implementation with zero ambiguity  
 
@@ -35,9 +37,11 @@ These constraints are assumed known and are enforced by design:
   - Treated as a target with tolerance (e.g. ±1–2 mm)
 - **Quick Return Ratio (QRR)**
   - Forward-to-return time ratio must satisfy:
+
     ```
     QRR_min ≤ QRR ≤ QRR_max
     ```
+
   - Since RPM is constant, time ratios are crank-angle ratios
 
 Any design that violates these constraints is invalid and must never reach stress evaluation.
@@ -47,6 +51,7 @@ Any design that violates these constraints is invalid and must never reach stres
 ## 3. Fundamental variables
 
 ### 3.1 2D kinematic variables
+
 - `r` : crank radius
 - `l` : connecting rod length
 - `D` : offset (vertical distance from crank pivot to slider line)
@@ -54,6 +59,7 @@ Any design that violates these constraints is invalid and must never reach stres
 - `ω` : angular speed (constant)
 
 ### 3.2 3D embodiment variables (examples, extensible)
+
 - link thickness
 - link width
 - link height
@@ -61,10 +67,11 @@ Any design that violates these constraints is invalid and must never reach stres
 - material density
 
 ### 3.3 Derived physical quantities
+
 - mass of each body
-- center of gravity of each body
+- center of gravity of each body — returned as `np.ndarray([x, y])`
 - mass moment of inertia of each body
-- joint reaction forces
+- joint reaction forces — returned as `np.ndarray([Fx, Fy])`
 - normal and shear stresses
 
 ---
@@ -72,11 +79,13 @@ Any design that violates these constraints is invalid and must never reach stres
 ## 4. Two-stage pipeline (mandatory design)
 
 ### Stage 1 — 2D kinematic synthesis and filtering
+
 - Purpose: eliminate invalid mechanisms cheaply
 - Inputs: sampled geometry variables
 - Outputs: kinematically valid `(r, l, D)` tuples
 
 Operations:
+
 1. Sample two of `{r, l, D}`
 2. Solve for the third variable so that `ROM ≈ 250 mm`
 3. Find dead-center crank angles
@@ -88,11 +97,13 @@ NO dynamics. NO stresses.
 ---
 
 ### Stage 2 — 3D embodiment, dynamics, and stress
+
 - Purpose: evaluate structural feasibility
 - Inputs: valid 2D mechanisms
 - Outputs: stress metrics + pass/fail labels
 
 Operations:
+
 1. Generate 3D geometry variants
 2. Compute mass and inertia
 3. Evaluate dynamics every 15°
@@ -104,23 +115,54 @@ Operations:
 
 ## 5. Authoritative kinematic equations (summary)
 
-Slider position:
+### Vector convention
 
-x_C(θ) = r cos θ + √(l² − (r sin θ + D)²)
+All position, velocity, and acceleration quantities are `np.ndarray` of shape `(2,)` representing `[x, y]`.
 
-Dead centers:
+- **Slider C** is constrained to the x-axis: `pos_C = [x_C, 0]`, `vel_C = [v_Cx, 0]`, `acc_C = [a_Cx, 0]`
+- **Crank pin B** moves in a full circle: `pos_B = [r·cosθ, r·sinθ]`, with non-zero x and y components
 
-dx_C / dθ = 0
+### Slider position
 
-ROM:
+    x_C(θ) = r cos θ + √(l² − (r sin θ + D)²)
+    pos_C   = np.array([x_C, 0.0])
 
-ROM = x_C(θ_max) − x_C(θ_min)
+### Crank pin position
 
-Quick return ratio:
+    pos_B = np.array([r·cos θ, r·sin θ])
 
-Δθ_forward = (θ_max − θ_min) mod 2π
-Δθ_return  = 2π − Δθ_forward
-QRR = Δθ_forward / Δθ_return
+### Dead centers
+
+    dx_C / dθ = 0    (solved numerically via root-finding)
+
+### ROM
+
+    ROM = x_C(θ_max) − x_C(θ_min)
+
+At the dead centres the triangle OBC is collinear, giving the exact positions:
+
+    x_max = √((r + l)² − D²)    (extended)
+    x_min = √((l − r)² − D²)    (retracted)
+
+### Closed-form solution for r given l, D, and ROM
+
+Setting S = ROM and solving algebraically:
+
+    r = (S / 2) · √( (4(l² − D²) − S²) / (4l² − S²) )
+
+Feasibility conditions that must hold before applying the formula:
+
+| Condition | Meaning |
+|---|---|
+| `D < l` | A valid triangle must exist |
+| `S < 2l` | Keeps the denominator positive |
+| `S < 2·√(l²−D²)` | Keeps the numerator positive; physical maximum stroke |
+
+### Quick return ratio
+
+    Δθ_forward = (θ_max − θ_min) mod 2π
+    Δθ_return  = 2π − Δθ_forward
+    QRR = Δθ_forward / Δθ_return
 
 All dead-center detection must be done via robust root-finding.
 
@@ -131,11 +173,13 @@ All dead-center detection must be done via robust root-finding.
 Each dataset row MUST include:
 
 ### Inputs
+
 - `r, l, D`
 - all 3D geometry parameters
 - mass and inertia properties
 
 ### Outputs
+
 - `sigma_max` (maximum normal stress over cycle)
 - `tau_max` (maximum shear stress over cycle)
 - `utilization = max(sigma_max/σ_allow, tau_max/τ_allow)`
@@ -151,6 +195,7 @@ mech390-crank-slider-ml/
 ---
 
 ### `configs/`
+
 **Purpose:** Define experiments. No code logic here.
 
 configs/
@@ -164,6 +209,7 @@ configs/
 └─ search.yaml
 
 Each config file:
+
 - defines sampling ranges
 - defines constraints
 - defines output paths
@@ -172,6 +218,7 @@ Each config file:
 ---
 
 ### `src/`
+
 **Purpose:** All reusable, deterministic logic.
 
 src/
@@ -184,13 +231,16 @@ src/
 
 - `kinematics.py`
   - Implements all position, velocity, acceleration equations
-  - Dead-center detection
+  - **All quantities returned as `np.ndarray([x, y])`**
+  - Slider C (x-axis constrained): `slider_position`, `slider_velocity`, `slider_acceleration`
+  - Crank pin B (full 2D circle): `crank_pin_position`, `crank_pin_velocity`, `crank_pin_acceleration`
+  - Dead-center detection via root-finding
   - ROM and QRR evaluation
   - NO randomness
 
 - `dynamics.py`
   - Newton–Euler equations
-  - Joint reaction forces
+  - Joint reaction forces — returned as `np.ndarray([Fx, Fy])`
   - Uses outputs from kinematics
 
 - `stresses.py`
@@ -202,6 +252,10 @@ src/
   - Orchestrates 15° sweep
   - Tracks maxima
   - Returns summary metrics
+
+- `mass_properties.py`
+  - Center-of-gravity positions — returned as `np.ndarray([x, y])`
+  - Mass moments of inertia (scalar `Izz`) for crank, rod, and slider
 
 ---
 
@@ -250,6 +304,7 @@ src/
 ---
 
 ### `scripts/`
+
 **Purpose:** Entry points only (thin wrappers).
 
 scripts/
@@ -258,6 +313,7 @@ scripts/
 └─ optimize_config.py
 
 Each script:
+
 - loads a config file
 - calls library code
 - creates a run directory
@@ -266,6 +322,7 @@ Each script:
 ---
 
 ### `data/`
+
 **Purpose:** Generated artifacts only.
 
 data/
@@ -280,6 +337,7 @@ Never hard-code paths to this directory.
 ---
 
 ### `reports/`
+
 **Purpose:** Diagnostics and summaries.
 
 reports/
@@ -313,6 +371,7 @@ All steps are repeatable and configuration-driven.
 ## 10. Final contract statement
 
 This document defines:
+
 - all constraints
 - all variables
 - all equations
