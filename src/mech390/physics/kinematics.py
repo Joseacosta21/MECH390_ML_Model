@@ -183,6 +183,101 @@ def crank_pin_acceleration(theta: float, omega: float, r: float) -> np.ndarray:
 # Dead-center detection and metrics
 # ---------------------------------------------------------------------------
 
+
+# ---------------------------------------------------------------------------
+# Helper helpers derived from vector formulation provided by user notes
+# ---------------------------------------------------------------------------
+
+def rod_angle(theta: float, r: float, l: float, e: float) -> float:
+    """
+    Compute the connecting-rod orientation \phi measured from the positive
+    x-axis (i.e. the angle between link BC and the slider axis).
+
+    The user derivation gives
+
+        sin(phi) = -(e + r*sin(theta)) / l
+
+    which enforces the slider constraint y_C = 0.  We choose the branch with
+    *positive* cosine (open configuration) by constructing the angle with
+    ``atan2(sin, cos_positive)``.
+
+    Args:
+        theta: crank angle [rad]
+        r: crank radius
+        l: rod length
+        e: offset (positive upward)
+
+    Returns:
+        phi: rod angle [rad]
+
+    Raises:
+        ValueError: if the argument of arcsin exceeds unity (invalid geometry).
+    """
+    sin_phi = -(e + r * np.sin(theta)) / l
+    if abs(sin_phi) > 1.0:
+        raise ValueError(f"rod_angle undefined (|sin_phi|>1): {sin_phi}")
+
+    # choose cos_phi positive to match the open mechanism
+    cos_phi = np.sqrt(max(0.0, 1.0 - sin_phi ** 2))
+    phi = np.arctan2(sin_phi, cos_phi)
+    return phi
+
+
+def rod_angular_velocity(theta: float, omega: float, r: float, l: float, e: float) -> float:
+    """
+    Relative angular speed of the connecting rod about pin B (\omega_{C/B}).
+
+    Derived from the condition that the slider moves purely horizontally
+    (V_{Cy}=0) and using
+
+        V_B = [\omega r sin\theta, \omega r cos\theta]
+
+    so
+
+        \omega_{C/B} = -V_{By} / (l cos\phi)
+
+    Args:
+        theta: crank angle [rad]
+        omega: crank angular velocity [rad/s] (CW positive)
+        r, l, e: geometry
+    Returns:
+        omega_{C/B} [rad/s]
+    """
+    phi = rod_angle(theta, r, l, e)
+    V_By = omega * r * np.cos(theta)  # from V_B j-component
+    return -V_By / (l * np.cos(phi))
+
+
+def rod_angular_acceleration(
+    theta: float,
+    omega: float,
+    r: float,
+    l: float,
+    e: float,
+    alpha2: float = 0.0,
+) -> float:
+    """
+    Angular acceleration of the connecting rod about pin B (\alpha_{C/B}).
+
+    Using the slider constraint (a_{Cy}=0) and the previously derived
+    expressions, we obtain
+
+        \alpha_{C/B} = (\omega_{C/B}^2 l sin\phi - a_{By})/(l cos\phi)
+
+    where
+        a_{By} = -\alpha_2 r cos\theta - \omega^2 r sin\theta
+
+    ``alpha2`` is the crank angular acceleration (default zero for constant
+    speed).  The sign conventions follow the CW positive orientation used
+    elsewhere in the code.
+    """
+    phi = rod_angle(theta, r, l, e)
+    omega_cb = rod_angular_velocity(theta, omega, r, l, e)
+    # acceleration of B (y component)
+    a_By = -alpha2 * r * np.cos(theta) - omega ** 2 * r * np.sin(theta)
+    return (omega_cb ** 2 * l * np.sin(phi) - a_By) / (l * np.cos(phi))
+
+
 def get_dead_center_angles(r: float, l: float, e: float):
     """
     Finds the two crank angles where slider velocity is zero (dead centers).
