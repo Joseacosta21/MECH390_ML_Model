@@ -3,15 +3,29 @@ import unittest
 import numpy as np
 import sys
 import os
+from unittest.mock import patch
 
 # Ensure src is in path
 sys.path.append(os.path.abspath('src'))
 
 from mech390.physics import kinematics
-from mech390.datagen import stage1_kinematic
+from mech390.physics import mass_properties
+from mech390.datagen import generate, stage1_kinematic, stage2_embodiment
 from mech390.config import get_baseline_config
 
 class TestKinematicsAndDatagen(unittest.TestCase):
+
+    @staticmethod
+    def _sample_valid_2d_design():
+        return {
+            "r": 0.08,
+            "l": 0.32,
+            "e": 0.03,
+            "ROM": 0.25,
+            "QRR": 1.9,
+            "theta_min": 0.1,
+            "theta_max": 2.2,
+        }
     
     def test_kinematic_feasibility(self):
         """Test valid and invalid geometry detection."""
@@ -122,6 +136,269 @@ class TestKinematicsAndDatagen(unittest.TestCase):
 
         rows = stage1_kinematic.generate_valid_2d_mechanisms(config)
         self.assertEqual(len(rows), 0, "Expected zero valid designs for impossible constraints")
+
+    def test_config_normalizes_scientific_notation(self):
+        """Config loader should coerce scientific-notation strings to numeric values."""
+        config = get_baseline_config()
+
+        self.assertIsInstance(config["limits"]["sigma_allow"], float)
+        self.assertAlmostEqual(config["limits"]["sigma_allow"], 180e6)
+
+        self.assertIsInstance(config["material"]["yield_stress"]["min"], float)
+        self.assertAlmostEqual(config["material"]["yield_stress"]["min"], 100e6)
+
+    def test_stage2_generates_multiple_variants_with_constraints(self):
+        """Stage-2 should produce N valid variants per 2D design and enforce width/pin constraints."""
+        config = get_baseline_config()
+        config["sampling"]["method"] = "random"
+        config["sampling"]["n_variants_per_2d"] = 12
+        config["sampling"]["stage2_max_attempts_per_2d"] = 3000
+
+        rows = stage2_embodiment.expand_to_3d([self._sample_valid_2d_design()], config)
+        self.assertEqual(len(rows), 12)
+
+        width_r_range = config["geometry"]["widths"]["width_r"]
+        width_l_range = config["geometry"]["widths"]["width_l"]
+        thickness_r_range = config["geometry"]["thicknesses"]["thickness_r"]
+        thickness_l_range = config["geometry"]["thicknesses"]["thickness_l"]
+        pin_a_range = config["geometry"]["pin_diameters"]["pin_diameter_A"]
+        pin_b_range = config["geometry"]["pin_diameters"]["pin_diameter_B"]
+        pin_c_range = config["geometry"]["pin_diameters"]["pin_diameter_C"]
+
+        for row in rows:
+            self.assertEqual(row["r"], 0.08)
+            self.assertEqual(row["l"], 0.32)
+            self.assertEqual(row["e"], 0.03)
+
+            self.assertTrue(width_r_range["min"] <= row["width_r"] <= width_r_range["max"])
+            self.assertTrue(width_l_range["min"] <= row["width_l"] <= width_l_range["max"])
+            self.assertTrue(thickness_r_range["min"] <= row["thickness_r"] <= thickness_r_range["max"])
+            self.assertTrue(thickness_l_range["min"] <= row["thickness_l"] <= thickness_l_range["max"])
+            self.assertTrue(pin_a_range["min"] <= row["pin_diameter_A"] <= pin_a_range["max"])
+            self.assertTrue(pin_b_range["min"] <= row["pin_diameter_B"] <= pin_b_range["max"])
+            self.assertTrue(pin_c_range["min"] <= row["pin_diameter_C"] <= pin_c_range["max"])
+
+            self.assertGreater(row["width_r"], row["pin_diameter_A"])
+            self.assertGreater(row["width_r"], row["pin_diameter_B"])
+            self.assertGreater(row["width_l"], row["pin_diameter_B"])
+            self.assertGreater(row["width_l"], row["pin_diameter_C"])
+
+    def test_stage2_supports_legacy_flat_geometry_keys(self):
+        """Stage-2 should accept legacy flat geometry keys when grouped keys are absent."""
+        baseline = get_baseline_config()
+        config = {
+            "random_seed": 101,
+            "sampling": {
+                "method": "random",
+                "n_variants_per_2d": 4,
+                "stage2_max_attempts_per_2d": 500,
+            },
+            "geometry": {
+                "width_r": baseline["geometry"]["widths"]["width_r"],
+                "width_l": baseline["geometry"]["widths"]["width_l"],
+                "thickness_r": baseline["geometry"]["thicknesses"]["thickness_r"],
+                "thickness_l": baseline["geometry"]["thicknesses"]["thickness_l"],
+                "pin_diameter_A": baseline["geometry"]["pin_diameters"]["pin_diameter_A"],
+                "pin_diameter_B": baseline["geometry"]["pin_diameters"]["pin_diameter_B"],
+                "pin_diameter_C": baseline["geometry"]["pin_diameters"]["pin_diameter_C"],
+            },
+        }
+
+        rows = stage2_embodiment.expand_to_3d([self._sample_valid_2d_design()], config)
+        self.assertEqual(len(rows), 4)
+
+    def test_stage2_raises_on_impossible_constraints(self):
+        """Stage-2 should fail clearly when configured ranges make constraints impossible."""
+        config = get_baseline_config()
+        config["sampling"]["method"] = "random"
+        config["sampling"]["n_variants_per_2d"] = 3
+        config["sampling"]["stage2_max_attempts_per_2d"] = 200
+        config["geometry"]["widths"]["width_r"] = {"min": 0.01, "max": 0.01}
+        config["geometry"]["widths"]["width_l"] = {"min": 0.01, "max": 0.01}
+        config["geometry"]["pin_diameters"]["pin_diameter_A"] = {"min": 0.02, "max": 0.02}
+        config["geometry"]["pin_diameters"]["pin_diameter_B"] = {"min": 0.02, "max": 0.02}
+        config["geometry"]["pin_diameters"]["pin_diameter_C"] = {"min": 0.02, "max": 0.02}
+
+        with self.assertRaises(ValueError):
+            stage2_embodiment.expand_to_3d([self._sample_valid_2d_design()], config)
+
+    def test_generate_dataset_uses_streaming_stage2_iterator(self):
+        """Generate should consume Stage-2 iterator and report n_stage2 correctly."""
+        mocked_stage2 = iter(
+            [
+                {
+                    "r": 0.1,
+                    "l": 0.4,
+                    "e": 0.02,
+                    "width_r": 0.02,
+                    "width_l": 0.02,
+                    "thickness_r": 0.015,
+                    "thickness_l": 0.015,
+                    "pin_diameter_A": 0.01,
+                    "pin_diameter_B": 0.01,
+                    "pin_diameter_C": 0.01,
+                },
+                {
+                    "r": 0.1,
+                    "l": 0.4,
+                    "e": 0.02,
+                    "width_r": 0.019,
+                    "width_l": 0.019,
+                    "thickness_r": 0.014,
+                    "thickness_l": 0.014,
+                    "pin_diameter_A": 0.01,
+                    "pin_diameter_B": 0.01,
+                    "pin_diameter_C": 0.01,
+                },
+            ]
+        )
+
+        config = {
+            "random_seed": 11,
+            "limits": {"sigma_allow": 180e6, "tau_allow": 100e6, "safety_factor": 1.0},
+        }
+
+        with patch(
+            "mech390.datagen.generate.stage1_kinematic.generate_valid_2d_mechanisms",
+            return_value=[{"r": 0.1, "l": 0.4, "e": 0.02}],
+        ), patch(
+            "mech390.datagen.generate.stage2_embodiment.iter_expand_to_3d",
+            return_value=mocked_stage2,
+        ):
+            result = generate.generate_dataset(config)
+
+        self.assertEqual(result.summary["n_stage1"], 1)
+        self.assertEqual(result.summary["n_stage2"], 2)
+        self.assertEqual(len(result.all_cases), 2)
+        self.assertIn("pass_fail", result.all_cases.columns)
+
+    def test_mass_properties_fixed_rho_policy(self):
+        """material.rho must be fixed (scalar or min==max)."""
+        cfg_scalar = {"material": {"rho": 7800}}
+        self.assertEqual(mass_properties._fixed_rho_from_config(cfg_scalar), 7800.0)
+
+        cfg_fixed_range = {"material": {"rho": {"min": 7850, "max": 7850}}}
+        self.assertEqual(mass_properties._fixed_rho_from_config(cfg_fixed_range), 7850.0)
+
+        cfg_variable_range = {"material": {"rho": {"min": 7700, "max": 7900}}}
+        with self.assertRaises(ValueError):
+            mass_properties._fixed_rho_from_config(cfg_variable_range)
+
+    def test_link_mass_matches_manual_formula(self):
+        """link_mass should match net-area times thickness times density."""
+        c = 0.10
+        width = 0.020
+        thickness = 0.012
+        d_left = 0.010
+        d_right = 0.011
+        rho = 7800.0
+
+        length = c + 0.5 * d_left + 0.5 * d_right
+        expected_area = length * width - (np.pi / 4.0) * (d_left**2 + d_right**2)
+        expected_mass = expected_area * thickness * rho
+
+        mass = mass_properties.link_mass(c, width, thickness, d_left, d_right, rho)
+        self.assertAlmostEqual(mass, expected_mass, places=12)
+
+    def test_link_mass_moi_positive_and_increasing(self):
+        """Link mass MOI should be positive and generally increase with section size."""
+        c = 0.11
+        d_left = 0.010
+        d_right = 0.010
+        rho = 7800.0
+
+        i_small = mass_properties.link_mass_moi_cg_z(
+            c, width=0.015, thickness=0.010, d_left=d_left, d_right=d_right, rho=rho
+        )
+        i_large = mass_properties.link_mass_moi_cg_z(
+            c, width=0.022, thickness=0.014, d_left=d_left, d_right=d_right, rho=rho
+        )
+        self.assertGreater(i_small, 0.0)
+        self.assertGreater(i_large, i_small)
+
+    def test_area_moments_gross_formulas(self):
+        """Gross area moments should match rectangle formulas."""
+        width = 0.02
+        thickness = 0.01
+        link_i = mass_properties.link_area_moments_gross(width, thickness)
+        self.assertAlmostEqual(link_i["Iyy"], width * thickness**3 / 12.0, places=15)
+        self.assertAlmostEqual(link_i["Izz"], thickness * width**3 / 12.0, places=15)
+
+        slider_w = 0.2
+        slider_h = 0.3
+        slider_i = mass_properties.slider_area_moments_gross(slider_w, slider_h)
+        self.assertAlmostEqual(slider_i["I_area_x"], slider_w * slider_h**3 / 12.0, places=15)
+        self.assertAlmostEqual(slider_i["I_area_y"], slider_h * slider_w**3 / 12.0, places=15)
+
+    def test_slider_mass_matches_manual_formula(self):
+        """Slider mass should subtract one pin-C hole from plan area."""
+        length = 0.2
+        width = 0.18
+        height = 0.12
+        d_c = 0.015
+        rho = 7800.0
+
+        expected_mass = (length * width - (np.pi / 4.0) * d_c**2) * height * rho
+        got_mass = mass_properties.slider_mass(length, width, height, d_c, rho)
+        self.assertAlmostEqual(got_mass, expected_mass, places=12)
+
+    def test_invalid_geometry_raises_for_negative_net_area(self):
+        """Mass helpers should raise when hole area exceeds rectangle area."""
+        with self.assertRaises(ValueError):
+            mass_properties.link_plan_area_net(
+                center_distance=0.005,
+                width=0.006,
+                d_left=0.02,
+                d_right=0.02,
+            )
+
+    def test_compute_design_mass_properties_schema(self):
+        """Design-level aggregator should return all required mass/inertia keys."""
+        config = get_baseline_config()
+        design = {
+            "r": 0.08,
+            "l": 0.30,
+            "width_r": 0.018,
+            "width_l": 0.017,
+            "thickness_r": 0.012,
+            "thickness_l": 0.011,
+            "pin_diameter_A": 0.010,
+            "pin_diameter_B": 0.010,
+            "pin_diameter_C": 0.009,
+        }
+
+        props = mass_properties.compute_design_mass_properties(design, config)
+        required = {
+            "rho",
+            "mass_crank",
+            "mass_rod",
+            "mass_slider",
+            "I_mass_crank_cg_z",
+            "I_mass_rod_cg_z",
+            "I_mass_slider_cg_z",
+            "I_area_crank_yy",
+            "I_area_crank_zz",
+            "I_area_rod_yy",
+            "I_area_rod_zz",
+            "I_area_slider_x",
+            "I_area_slider_y",
+        }
+        self.assertTrue(required.issubset(set(props.keys())))
+
+        for key in required:
+            self.assertTrue(np.isfinite(props[key]), f"{key} should be finite")
+            self.assertGreater(props[key], 0.0, f"{key} should be positive")
+
+    def test_mass_properties_cog_helpers_backward_compatibility(self):
+        """Existing COG helpers should still return 2D vectors."""
+        theta, r, l, e = np.pi / 6, 0.1, 0.4, 0.02
+        c_crank = mass_properties.crank_cog(theta, r)
+        c_rod = mass_properties.rod_cog(theta, r, l, e)
+        c_slider = mass_properties.slider_cog(theta, r, l, e)
+
+        for name, vec in [("crank_cog", c_crank), ("rod_cog", c_rod), ("slider_cog", c_slider)]:
+            self.assertIsInstance(vec, np.ndarray, f"{name} should return np.ndarray")
+            self.assertEqual(vec.shape, (2,), f"{name} should have shape (2,)")
 
     def test_slider_returns_vector(self):
         """Slider pos/vel/acc must return np.ndarray of shape (2,) with y == 0."""
