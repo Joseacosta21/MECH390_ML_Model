@@ -1,4 +1,5 @@
 # Data-Driven Design of an Offset Crank–Slider Mechanism  
+
 **MECH 390 – Machine Learning–Assisted Mechanical Design**
 
 ---
@@ -8,6 +9,7 @@
 This repository implements a physics-based data generation and machine learning workflow for the design and evaluation of an offset crank–slider mechanism.
 
 The goal is to automate what is traditionally done by hand in mechanical design:
+
 - select a mechanism geometry,
 - verify that it satisfies motion requirements,
 - evaluate forces and stresses,
@@ -39,14 +41,23 @@ Only geometry and motion are considered.
 No forces, masses, or stresses are evaluated at this stage.
 
 ### Process
-1. Two geometric parameters are randomly sampled  
-   (e.g., connecting rod length and offset).
-2. The remaining geometric parameter (typically the crank radius) is solved for numerically so that the slider achieves the required range of motion.
-3. Dead-center positions are computed by solving for zero slider velocity.
+
+1. Rod length `l` and offset `e` are sampled from configured ranges.
+2. The crank radius `r` is solved **analytically** (exact closed-form) from the target ROM:
+
+   ```
+   r = (S/2) * sqrt( (4(l²−e²) − S²) / (4l² − S²) )
+   ```
+
+   where `S = ROM`. The following conditions are checked before applying the formula:
+   - `e < l` — a valid triangle must exist
+   - `S < 2l` — keeps the denominator positive
+   - `S < 2√(l²−e²)` — keeps the numerator positive (physical maximum stroke)
+
+3. Dead-center positions are found via robust numerical root-finding on the velocity equation.
 4. The forward and return crank-angle spans are evaluated.
 5. The quick return ratio is computed from these angle spans.
 6. The geometry is retained only if:
-   - the range of motion matches the required value within tolerance, and
    - the quick return ratio lies within the acceptable range.
 
 This stage produces a set of kinematically valid two-dimensional mechanisms.
@@ -60,6 +71,7 @@ Only mechanisms that pass Stage 1 are evaluated further.
 In Stage 2, each valid 2D mechanism is expanded into a family of three-dimensional designs.
 
 ### Process
+
 1. A standard link topology is assumed for each component.
 2. Key geometric dimensions such as thickness, width, height, and pin diameter are varied.
 3. Mass, center of gravity, and mass moments of inertia are computed from the 3D geometry.
@@ -81,6 +93,7 @@ This structure reflects standard mechanical design practice:
 3. Finally, optimize or automate design decisions.
 
 From a computational standpoint:
+
 - kinematic checks are inexpensive and eliminate invalid designs early,
 - stress analysis is reserved for physically meaningful cases,
 - overall data generation becomes scalable and efficient.
@@ -107,6 +120,7 @@ The core code does not need to be modified to run new studies.
 Configuration files describe how data is generated and how models are trained.
 
 They define:
+
 - geometry sampling ranges,
 - kinematic constraints,
 - stress limits,
@@ -116,20 +130,18 @@ Rather than listing individual designs, configuration files specify how entire f
 
 ---
 
-
 ## 9. Role of machine learning
 
 Machine learning does not replace physical modeling in this project.
 
 Instead, it is used to:
-	•	approximate the relationship between geometry and peak stress,
-	•	rapidly classify designs as likely pass or fail,
-	•	enable fast exploration of large design spaces.
+ • approximate the relationship between geometry and peak stress,
+ • rapidly classify designs as likely pass or fail,
+ • enable fast exploration of large design spaces.
 
 All training data is generated using physics-based equations.
 
 ⸻
-
 
 # Repository File Tree and Responsibilities (Authoritative)
 
@@ -149,10 +161,12 @@ Each file below is listed **once** with its responsibility stated **inline**, so
 | `configs/generate/` | Data generation configurations |
 | `configs/train/` | ML training configurations |
 | `configs/optimize/` | Optimization and inference configurations |
-| `src/mech390/physics/kinematics.py` | All position, velocity, acceleration, ROM, and QRR equations |
-| `src/mech390/physics/dynamics.py` | Newton–Euler force and moment equations |
+| `src/mech390/physics/kinematics.py` | Position, velocity, acceleration for slider (x-axis constrained) and crank pin (2D circular motion); all quantities returned as `np.ndarray([x, y])`; ROM and QRR metrics |
+| `src/mech390/physics/dynamics.py` | Newton–Euler joint reaction forces; forces returned as `np.ndarray([Fx, Fy])` |
+| `src/mech390/physics/mass_properties.py` | Center-of-gravity positions (`np.ndarray([x, y])`) and mass moments of inertia for each link |
 | `src/mech390/physics/stresses.py` | Normal and shear stress calculations |
-| `src/mech390/datagen/stage1_kinematic.py` | 2D kinematic synthesis and filtering |
+| `src/mech390/physics/engine.py` | 15° crank-angle sweep; orchestrates kinematics → dynamics → stresses; tracks peak sigma and tau |
+| `src/mech390/datagen/stage1_kinematic.py` | 2D kinematic synthesis using exact closed-form r formula; feasibility filtering |
 | `src/mech390/datagen/stage2_embodiment.py` | 3D geometry, mass, and inertia generation |
 | `scripts/generate_dataset.py` | CLI entry point for dataset generation |
 | `scripts/train_model.py` | CLI entry point for ML training |
