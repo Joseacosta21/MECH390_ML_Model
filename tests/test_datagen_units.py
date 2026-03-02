@@ -9,6 +9,7 @@ sys.path.append(os.path.abspath('src'))
 
 from mech390.physics import kinematics
 from mech390.datagen import stage1_kinematic
+from mech390.config import get_baseline_config
 
 class TestKinematicsAndDatagen(unittest.TestCase):
     
@@ -41,13 +42,18 @@ class TestKinematicsAndDatagen(unittest.TestCase):
             self.assertTrue(0 <= root < 2*np.pi)
 
     def test_rom_target_solve(self):
-        """Test that stage1 solver hits the target ROM."""
-        target_rom = 0.25
+        """Test that stage1 solver hits the target ROM, using r bounds from baseline.yaml."""
+        config = get_baseline_config()
+        r_range = config['geometry']['r']
+        r_min = r_range['min']
+        r_max = r_range['max']
+
+        target_rom = config['operating']['ROM']
         l = 0.4
         e = 0.02
-        
-        # Solve for r
-        r_sol = stage1_kinematic.solve_for_r_given_rom(l, e, target_rom)
+
+        # Solve for r using bounds from config
+        r_sol = stage1_kinematic.solve_for_r_given_rom(l, e, target_rom, r_min=r_min, r_max=r_max)
         
         self.assertIsNotNone(r_sol, "Solver should find a solution for reasonable inputs")
         
@@ -71,6 +77,37 @@ class TestKinematicsAndDatagen(unittest.TestCase):
         metrics = kinematics.calculate_metrics(r, l, e)
         self.assertNotEqual(metrics['QRR'], 1.0, "QRR for offset mechanism should not be exactly 1.0")
         self.assertTrue(metrics['QRR'] > 0, "QRR should be positive")
+
+    def test_slider_returns_vector(self):
+        """Slider pos/vel/acc must return np.ndarray of shape (2,) with y == 0."""
+        r, l, e, theta, omega = 0.1, 0.4, 0.02, np.pi / 4, 10.0
+
+        pos = kinematics.slider_position(theta, r, l, e)
+        vel = kinematics.slider_velocity(theta, omega, r, l, e)
+        acc = kinematics.slider_acceleration(theta, omega, r, l, e)
+
+        for name, vec in [("slider_position", pos), ("slider_velocity", vel), ("slider_acceleration", acc)]:
+            self.assertIsInstance(vec, np.ndarray, f"{name} should return np.ndarray")
+            self.assertEqual(vec.shape, (2,), f"{name} should have shape (2,)")
+            self.assertEqual(vec[1], 0.0, f"{name} y-component should be 0.0")
+
+    def test_crank_pin_returns_vector(self):
+        """Crank-pin pos/vel/acc must return np.ndarray of shape (2,) with both components non-trivially set."""
+        r, theta, omega = 0.1, np.pi / 3, 10.0
+
+        pos = kinematics.crank_pin_position(theta, r)
+        vel = kinematics.crank_pin_velocity(theta, omega, r)
+        acc = kinematics.crank_pin_acceleration(theta, omega, r)
+
+        for name, vec in [("crank_pin_position", pos), ("crank_pin_velocity", vel), ("crank_pin_acceleration", acc)]:
+            self.assertIsInstance(vec, np.ndarray, f"{name} should return np.ndarray")
+            self.assertEqual(vec.shape, (2,), f"{name} should have shape (2,)")
+
+        # Verify values analytically
+        np.testing.assert_allclose(pos, [r * np.cos(theta), r * np.sin(theta)], rtol=1e-10)
+        np.testing.assert_allclose(vel, [-r * omega * np.sin(theta), r * omega * np.cos(theta)], rtol=1e-10)
+        np.testing.assert_allclose(acc, [-r * omega**2 * np.cos(theta), -r * omega**2 * np.sin(theta)], rtol=1e-10)
+
 
 if __name__ == '__main__':
     unittest.main()
