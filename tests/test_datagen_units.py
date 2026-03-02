@@ -153,6 +153,53 @@ class TestKinematicsAndDatagen(unittest.TestCase):
         np.testing.assert_allclose(vel, [-r * omega * np.sin(theta), r * omega * np.cos(theta)], rtol=1e-10)
         np.testing.assert_allclose(acc, [-r * omega**2 * np.cos(theta), -r * omega**2 * np.sin(theta)], rtol=1e-10)
 
+    def test_rod_kinematics_helpers(self):
+        """Verify the new rod-angle/omega/alpha helper functions behave correctly."""
+        r, l, e = 0.1, 0.4, 0.02
+        theta = np.pi / 6
+        omega = 5.0
+        alpha2 = 0.0
+
+        # phi consistency
+        phi = kinematics.rod_angle(theta, r, l, e)
+        self.assertAlmostEqual(np.sin(phi), -(e + r * np.sin(theta)) / l, places=10)
+        self.assertGreater(np.cos(phi), 0.0, "rod angle should pick positive cosine branch")
+
+        # slider position via phi should match original function once the
+        # offset translation is accounted for.  The rod-angle derivation
+        # assumes the slider line at y = -e (pivot at origin), whereas
+        # ``slider_position`` returns a frame where the slider is at y = 0.
+        posB = kinematics.crank_pin_position(theta, r)
+        posC_phi = posB + np.array([l * np.cos(phi), l * np.sin(phi)])
+        # translate upward by +e to move the slider line to y=0
+        posC_phi_shifted = posC_phi + np.array([0.0, e])
+        posC = kinematics.slider_position(theta, r, l, e)
+        np.testing.assert_allclose(posC, posC_phi_shifted, rtol=1e-8, atol=1e-12)
+
+        # angular velocity via helper equals implicitly derived value
+        omega_cb = kinematics.rod_angular_velocity(theta, omega, r, l, e)
+        # compute using slider velocity formula: should satisfy V_C = V_B + V_C/B
+        V_B = kinematics.crank_pin_velocity(theta, omega, r)
+        V_C = kinematics.slider_velocity(theta, omega, r, l, e)
+        V_rel = np.array([-omega_cb * l * np.sin(phi), omega_cb * l * np.cos(phi)])
+        np.testing.assert_allclose(V_C, V_B + V_rel, rtol=1e-8, atol=1e-12)
+
+        # angular acceleration helper consistency
+        alpha_cb = kinematics.rod_angular_acceleration(theta, omega, r, l, e, alpha2=alpha2)
+        # use acceleration relationship: a_C = a_B + a_rel
+        a_B = kinematics.crank_pin_acceleration(theta, omega, r)
+        a_C = kinematics.slider_acceleration(theta, omega, r, l, e)
+        a_rel = np.array([
+            -alpha_cb * l * np.sin(phi) - omega_cb ** 2 * l * np.cos(phi),
+            alpha_cb * l * np.cos(phi) - omega_cb ** 2 * l * np.sin(phi),
+        ])
+        np.testing.assert_allclose(a_C, a_B + a_rel, rtol=1e-8, atol=1e-12)
+
+        # verify invalid geometry for rod_angle raises
+        with self.assertRaises(ValueError):
+            # choose e large so sin_phi magnitude >1
+            kinematics.rod_angle(theta, r, l, e=l + 1.0)
+
 
 if __name__ == '__main__':
     unittest.main()
