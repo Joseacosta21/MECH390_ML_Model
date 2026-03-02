@@ -34,7 +34,11 @@ These constraints are assumed known and are enforced by design:
   - RPM is NOT a design variable
 - **Range of Motion (ROM)**
   - Target slider stroke: `ROM_target = 250 mm`
-  - Treated as a target with tolerance (e.g. ±1–2 mm)
+  - Treated as a hard acceptance target with configured tolerance:
+
+    ```
+    |ROM_computed - ROM_target| <= ROM_tolerance
+    ```
 - **Quick Return Ratio (QRR)**
   - Forward-to-return time ratio must satisfy:
 
@@ -86,11 +90,12 @@ Any design that violates these constraints is invalid and must never reach stres
 
 Operations:
 
-1. Sample two of `{r, l, D}`
-2. Solve for the third variable so that `ROM ≈ 250 mm`
-3. Find dead-center crank angles
-4. Compute QRR
-5. Accept or reject geometry
+1. Sample two of `{r, l, D}` (current implementation samples `l` and `D`)
+2. Solve for the third variable (`r`) using the closed-form ROM relation
+3. Apply closed-form feasibility checks (real radicals, branch feasibility, full-rotation geometry)
+4. Find dead-center crank angles via root-finding
+5. Compute ROM and QRR from kinematics
+6. Accept only if both ROM tolerance and QRR bounds are satisfied
 
 NO dynamics. NO stresses.
 
@@ -157,6 +162,14 @@ Feasibility conditions that must hold before applying the formula:
 | `D < l` | A valid triangle must exist |
 | `S < 2l` | Keeps the denominator positive |
 | `S < 2·√(l²−D²)` | Keeps the numerator positive; physical maximum stroke |
+
+Additional branch-feasibility conditions that must hold after computing `r`:
+
+| Condition | Meaning |
+|---|---|
+| `l > r + |D|` | Full-rotation geometry validity (no lockup over one cycle) |
+| `l² + r² − D² − S²/2 >= 0` | Squared-equation branch consistency |
+| `|S_original(r,l,D) − S_target| <= ROM_tolerance` | Rejects extraneous roots introduced by squaring |
 
 ### Quick return ratio
 
@@ -272,7 +285,8 @@ src/
 
 - `stage1_kinematic.py`
   - Implements Stage 1 algorithm
-  - Solves for unknown geometry
+  - Solves for unknown geometry using closed-form `r(l,D,S)`
+  - Applies branch-feasibility checks to reject extraneous analytical roots
   - Applies ROM and QRR constraints
 
 - `stage2_embodiment.py`
