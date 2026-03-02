@@ -4,7 +4,7 @@ Implements the "Sample 2, Solve 1" strategy to enforce ROM constraints.  # Notes
 """  # Module docstring end.
 
 import numpy as np  # Imports NumPy utilities (currently unused here).
-from scipy.optimize import brentq  # Imports Brent root finder for solving r.
+# brentq no longer needed — r is solved analytically from the ROM formula.
 from typing import Dict, List, Optional, Tuple, Any  # Imports typing aliases for signatures.
 import logging  # Imports logging for runtime diagnostics.
 
@@ -15,80 +15,79 @@ from mech390.datagen import sampling  # Imports sampling utilities for candidate
 logger = logging.getLogger(__name__)  # Creates a module-scoped logger.
 
 
-def solve_for_r_given_rom(  # Defines helper that solves r to hit target ROM.
-    l: float,  # Accepts rod length.
-    e: float,  # Accepts offset.
-    target_rom: float,  # Accepts desired ROM target.
-    r_min: float,  # Accepts lower bound for r search.
-    r_max: float,  # Accepts upper bound for r search.
-    tol: float = 1e-4,  # Accepts root-finding tolerance with default.
-) -> Optional[float]:  # Returns solved r or None when infeasible.
-    """  # Function docstring start.
-    Numerically solves for crank radius r that gives the target ROM,  # Describes solve goal.
-    given rod length l and offset e.  # Describes known inputs.
+def solve_for_r_given_rom(
+    l: float,
+    e: float,
+    target_rom: float,
+    r_min: float,
+    r_max: float,
+) -> Optional[float]:
+    """
+    Analytically solves for crank radius r that produces the target ROM,
+    given rod length l and offset e.
 
-    Args:  # Starts argument documentation.
-        l: Rod length.  # Documents l.
-        e: Offset (D).  # Documents e.
-        target_rom: Desired Range of Motion.  # Documents target ROM.
-        r_min, r_max: Bounds for r.  # Documents root search interval.
-        tol: Tolerance for ROM error.  # Documents numerical tolerance.
+    Derivation
+    ----------
+    From the dead-centre geometry, the slider positions at the two dead centres are:
 
-    Returns:  # Starts return documentation.
-        r_solution: The found radius r, or None if no solution in bounds.  # Documents output behavior.
-    """  # Function docstring end.
+        x_max = sqrt((r + l)^2 - e^2)   (extended)
+        x_min = sqrt((l - r)^2 - e^2)   (retracted)
 
-    def objective(r_try):  # Defines residual function for root solver.
-        # Kinematics check first  # Notes why validation precedes metric use.
-        # We need to ensure valid geometry before computing ROM  # Explains precondition logic.
-        # Basic check: l > r + |e| is a safe heuristic for full rotation,  # Mentions heuristic relation.
-        # but let kinematics module handle exact checks.  # Defers exact validity to central physics code.
+    Setting S = ROM = x_max - x_min and solving algebraically yields the
+    exact closed-form:
 
-        # We wrap kinematics call in try-except to handle invalid geometries gracefully  # Explains exception guard.
-        # during the solver's exploration  # Clarifies this happens while sampling r values.
-        try:  # Attempts metric computation for candidate r.
-            metrics = kinematics.calculate_metrics(r_try, l, e)  # Computes kinematic metrics for trial geometry.
-            if not metrics["valid"]:  # Checks whether geometry is physically valid.
-                # Penalty or indicator of invalidity.  # Indicates this branch encodes invalid states.
-                # If invalid, it usually means locking, so ROM is undefined or 0?  # Notes interpretation of invalidity.
-                # Returning a large error might confuse solver if not monotonic.  # Explains conservative penalty choice.
-                return -1.0  # Returns a fixed negative residual marker for invalid geometry.
+        r = (S / 2) * sqrt( (4*(l^2 - e^2) - S^2) / (4*l^2 - S^2) )
 
-            return metrics["ROM"] - target_rom  # Returns ROM residual for root-finding.
-        except ValueError:  # Catches known metric errors from invalid configurations.
-            return -1.0  # Returns same invalid residual marker on exception.
+    Args:
+        l: Rod length.
+        e: Offset (D).
+        target_rom: Desired Range of Motion (S).
+        r_min, r_max: Allowable bounds for r (read from config geometry.r).
 
-    # Clamp r_max to ensure valid geometry: l > r + |e| => r < l - |e|  # States geometric cap used before solving.
-    # Heuristic: subtract small epsilon  # Explains why a margin is removed from the cap.
-    r_geo_max = l - abs(e) - 0.001  # Computes geometry-safe upper bound for r.
-    if r_max > r_geo_max:  # Checks whether configured upper bound exceeds safe maximum.
-        r_max = r_geo_max  # Tightens solver bound to safe value.
+    Returns:
+        r_solution: The exact radius r, or None if infeasible for these inputs.
+    """
+    S = target_rom
 
-    if r_max < r_min:  # Detects invalid or empty search interval.
-        return None  # Exits early when no feasible r interval exists.
+    # --- Geometric feasibility conditions ---
+    # These must all hold for the closed-form formula to yield a real, positive r.
 
-    # Check bounds first to see if they bracket the zero  # Notes bracketing prerequisite for Brent method.
-    try:  # Evaluates objective at both endpoints.
-        y_min = objective(r_min)  # Computes residual at lower bound.
-        y_max = objective(r_max)  # Computes residual at upper bound.
-    except Exception:  # Catches unexpected objective failures.
-        return None  # Returns no solution when endpoint evaluation fails.
+    # 1. Offset must be less than rod length (otherwise no valid triangle exists)
+    if abs(e) >= l:
+        logger.debug("solve_for_r: e=%.4g >= l=%.4g — offset too large", e, l)
+        return None
 
-    # We expect ROM to increase with r roughly monotonically (ROM ~ 2r).  # Documents monotonic intuition.
-    # If objective(r_min) > 0, then even smallest r is too big -> Fail.  # Explains lower-bound rejection rule.
-    # If objective(r_max) < 0, then even largest r is too small -> Fail.  # Explains upper-bound rejection rule.
+    # 2. ROM must be less than 2l  (ensures denominator 4l²−S² > 0)
+    if S >= 2 * l:
+        logger.debug("solve_for_r: S=%.4g >= 2l=%.4g — ROM exceeds rod-length limit", S, 2 * l)
+        return None
 
-    if y_min > 0:  # Checks if lower bound already overshoots target ROM.
-        return None  # Rejects because root cannot be in interval.
-    if y_max < 0:  # Checks if upper bound still undershoots target ROM.
-        return None  # Rejects because root cannot be in interval.
+    # 3. ROM must be less than 2*sqrt(l²−e²)  (ensures numerator 4(l²−e²)−S² > 0)
+    max_rom = 2 * np.sqrt(l**2 - e**2)
+    if S >= max_rom:
+        logger.debug(
+            "solve_for_r: S=%.4g >= 2*sqrt(l²−e²)=%.4g — ROM exceeds geometric maximum",
+            S, max_rom,
+        )
+        return None
 
-    # If valid brackets, solve  # Marks numerical solve section.
-    try:  # Attempts bracketing root solve.
-        r_sol = brentq(objective, r_min, r_max, xtol=tol)  # Solves for r where residual is zero.
-        return r_sol  # Returns solved radius.
-    except Exception:  # Catches numerical failures from solver.
-        return None  # Returns no solution on solver failure.
+    # --- Closed-form solution ---
+    #   r = (S/2) * sqrt( (4(l²−e²) − S²) / (4l² − S²) )
+    r_sol = (S / 2.0) * np.sqrt((4 * (l**2 - e**2) - S**2) / (4 * l**2 - S**2))
+
+    # --- Validate against config bounds ---
+    if not (r_min <= r_sol <= r_max):
+        logger.debug(
+            "solve_for_r: r=%.4g outside config bounds [%.4g, %.4g]",
+            r_sol, r_min, r_max,
+        )
+        return None
+
+    # --- Confirm full-rotation crank-slider geometry (l > r + |e|) ---
+    if l <= r_sol + abs(e):
+        return None
+
+    return r_sol
 
 
 def generate_valid_2d_mechanisms(  # Defines main generator for valid 2D mechanism designs.
