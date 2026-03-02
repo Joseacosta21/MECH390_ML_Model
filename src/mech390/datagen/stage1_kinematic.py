@@ -1,18 +1,182 @@
-"""  # Module docstring start.
-Stage 1: 2D Kinematic Synthesis and Filtering.  # Summarizes this stage's purpose.
-Implements the "Sample 2, Solve 1" strategy to enforce ROM constraints.  # Notes the core method used.
-"""  # Module docstring end.
+"""
+Stage 1: 2D kinematic synthesis and filtering.
+"""
 
-import numpy as np  # Imports NumPy utilities (currently unused here).
-# brentq no longer needed — r is solved analytically from the ROM formula.
-from typing import Dict, List, Optional, Tuple, Any  # Imports typing aliases for signatures.
-import logging  # Imports logging for runtime diagnostics.
+from __future__ import annotations
 
-from mech390.physics import kinematics  # Imports kinematic metric computations.
-from mech390.datagen import sampling  # Imports sampling utilities for candidate generation.
+import logging
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-# Set up logger  # Marks logger initialization section.
-logger = logging.getLogger(__name__)  # Creates a module-scoped logger.
+import numpy as np
+
+from mech390.datagen import sampling
+from mech390.physics import kinematics
+
+logger = logging.getLogger(__name__)
+
+_CONSTRAINT_FUNCS = {
+    "abs": abs,
+    "sqrt": np.sqrt,
+    "min": min,
+    "max": max,
+    "pow": pow,
+    "sin": np.sin,
+    "cos": np.cos,
+    "tan": np.tan,
+}
+
+
+def _range_bounds(range_def: Any, name: str) -> Tuple[float, float]:
+    """Normalize config range definitions to (min, max)."""
+    if isinstance(range_def, dict) and "min" in range_def and "max" in range_def:
+        return float(range_def["min"]), float(range_def["max"])
+    if isinstance(range_def, (list, tuple)) and len(range_def) == 2:
+        return float(range_def[0]), float(range_def[1])
+    raise ValueError(f"Range for '{name}' must be {{min,max}} or [min,max]. Got: {range_def!r}")
+
+
+def _feasible_e_interval_for_l(
+    l: float,
+    e_min: float,
+    e_max: float,
+    target_rom: float,
+    strict_eps: float,
+) -> Optional[Tuple[float, float]]:
+    """
+    Feasible e-interval for a fixed l under:
+      1) |e| < l
+      2) target_rom < 2*sqrt(l^2 - e^2)
+      3) e_min <= e <= e_max
+    """
+    if target_rom >= 2.0 * l:
+        return None
+
+    e_cap_sq = l * l - (target_rom * target_rom) / 4.0
+    if e_cap_sq <= 0.0:
+        return None
+    e_cap = np.sqrt(e_cap_sq)
+
+    low = max(e_min, -l + strict_eps, -e_cap + strict_eps)
+    high = min(e_max, l - strict_eps, e_cap - strict_eps)
+    if low >= high:
+        return None
+    return low, high
+
+
+def _generate_constrained_stage1_candidates(
+    method: str,
+    n_samples: int,
+    seed: int,
+    l_range: Any,
+    e_range: Any,
+    target_rom: float,
+    max_draws: int,
+    strict_eps: float,
+) -> List[Dict[str, float]]:
+    """Generate (l, e) candidates that satisfy pre-feasibility constraints."""
+    l_min_cfg, l_max_cfg = _range_bounds(l_range, "l")
+    e_min_cfg, e_max_cfg = _range_bounds(e_range, "e")
+
+    l_low = max(l_min_cfg, (target_rom / 2.0) + strict_eps)
+    l_high = l_max_cfg
+    if l_low >= l_high:
+        logger.warning(
+            "No feasible l-domain for target ROM %.6g inside config bounds [%.6g, %.6g].",
+            target_rom, l_min_cfg, l_max_cfg,
+        )
+        return []
+
+    if n_samples <= 0:
+        return []
+
+    candidates: List[Dict[str, float]] = []
+
+    if method == "random":
+        rng = np.random.default_rng(seed)
+        for _ in range(max_draws):
+            if len(candidates) >= n_samples:
+                break
+            l = float(rng.uniform(l_low, l_high))
+            e_interval = _feasible_e_interval_for_l(l, e_min_cfg, e_max_cfg, target_rom, strict_eps)
+            if e_interval is None:
+                continue
+            e = float(rng.uniform(e_interval[0], e_interval[1]))
+            candidates.append({"l": l, "e": e})
+    elif method == "latin_hypercube":
+        draws_used = 0
+        batch_id = 0
+        while len(candidates) < n_samples and draws_used < max_draws:
+            remaining = n_samples - len(candidates)
+            batch_n = min(max(remaining * 2, 64), max_draws - draws_used)
+            unit_samples = sampling.get_sampler(
+                method="latin_hypercube",
+                param_ranges={
+                    "u_l": {"min": 0.0, "max": 1.0},
+                    "u_e": {"min": 0.0, "max": 1.0},
+                },
+                n_samples=batch_n,
+                seed=seed + batch_id,
+            )
+            draws_used += batch_n
+            batch_id += 1
+
+            for row in unit_samples:
+                if len(candidates) >= n_samples:
+                    break
+                l = float(l_low + row["u_l"] * (l_high - l_low))
+                e_interval = _feasible_e_interval_for_l(l, e_min_cfg, e_max_cfg, target_rom, strict_eps)
+                if e_interval is None:
+                    continue
+                e = float(e_interval[0] + row["u_e"] * (e_interval[1] - e_interval[0]))
+                candidates.append({"l": l, "e": e})
+    else:
+        raise ValueError(f"Unknown sampling method: {method}")
+
+    if len(candidates) < n_samples:
+        logger.warning(
+            "Constrained sampling produced %d/%d feasible (l,e) candidates. "
+            "Consider widening l/e bounds or increasing n_attempts.",
+            len(candidates), n_samples,
+        )
+    return candidates
+
+
+def _compile_constraints(constraints: List[str]) -> List[Tuple[str, Any]]:
+    """Compile sampling constraints for repeated evaluation."""
+    compiled: List[Tuple[str, Any]] = []
+    for expr in constraints:
+        if not isinstance(expr, str):
+            raise TypeError(f"Constraint must be a string. Got: {type(expr)}")
+        compiled.append((expr, compile(expr, "<sampling_constraint>", "eval")))
+    return compiled
+
+
+def _build_constraint_context(r: float, l: float, e: float, target_rom: float) -> Dict[str, float]:
+    """Provide standard variables available to sampling constraint expressions."""
+    return {
+        "r": r,
+        "l": l,
+        "e": e,
+        "S": target_rom,
+        "ROM_target": target_rom,
+    }
+
+
+def _constraints_satisfied(compiled_constraints: List[Tuple[str, Any]], context: Dict[str, float]) -> bool:
+    """Evaluate all compiled constraint expressions against a context."""
+    if not compiled_constraints:
+        return True
+
+    locals_env = dict(_CONSTRAINT_FUNCS)
+    locals_env.update(context)
+    for expr, code in compiled_constraints:
+        try:
+            if not bool(eval(code, {"__builtins__": {}}, locals_env)):
+                return False
+        except Exception as exc:
+            logger.debug("Constraint evaluation failed for '%s': %s", expr, exc)
+            return False
+    return True
 
 
 def solve_for_r_given_rom(
@@ -21,193 +185,171 @@ def solve_for_r_given_rom(
     target_rom: float,
     r_min: float,
     r_max: float,
+    rom_tolerance: float = 1e-5,
 ) -> Optional[float]:
     """
-    Analytically solves for crank radius r that produces the target ROM,
-    given rod length l and offset e.
-
-    Derivation
-    ----------
-    From the dead-centre geometry, the slider positions at the two dead centres are:
-
-        x_max = sqrt((r + l)^2 - e^2)   (extended)
-        x_min = sqrt((l - r)^2 - e^2)   (retracted)
-
-    Setting S = ROM = x_max - x_min and solving algebraically yields the
-    exact closed-form:
-
-        r = (S / 2) * sqrt( (4*(l^2 - e^2) - S^2) / (4*l^2 - S^2) )
-
-    Args:
-        l: Rod length.
-        e: Offset (D).
-        target_rom: Desired Range of Motion (S).
-        r_min, r_max: Allowable bounds for r (read from config geometry.r).
-
-    Returns:
-        r_solution: The exact radius r, or None if infeasible for these inputs.
+    Analytically solve crank radius r for target ROM at fixed l and e.
+    Returns None when infeasible.
     """
-    S = target_rom
+    s_val = target_rom
 
-    # --- Geometric feasibility conditions ---
-    # These must all hold for the closed-form formula to yield a real, positive r.
-
-    # 1. Offset must be less than rod length (otherwise no valid triangle exists)
     if abs(e) >= l:
-        logger.debug("solve_for_r: e=%.4g >= l=%.4g — offset too large", e, l)
+        logger.debug("solve_for_r: e=%.4g >= l=%.4g", e, l)
         return None
 
-    # 2. ROM must be less than 2l  (ensures denominator 4l²−S² > 0)
-    if S >= 2 * l:
-        logger.debug("solve_for_r: S=%.4g >= 2l=%.4g — ROM exceeds rod-length limit", S, 2 * l)
+    if s_val >= 2 * l:
+        logger.debug("solve_for_r: S=%.4g >= 2l=%.4g", s_val, 2 * l)
         return None
 
-    # 3. ROM must be less than 2*sqrt(l²−e²)  (ensures numerator 4(l²−e²)−S² > 0)
     max_rom = 2 * np.sqrt(l**2 - e**2)
-    if S >= max_rom:
-        logger.debug(
-            "solve_for_r: S=%.4g >= 2*sqrt(l²−e²)=%.4g — ROM exceeds geometric maximum",
-            S, max_rom,
-        )
+    if s_val >= max_rom:
+        logger.debug("solve_for_r: S=%.4g >= max_rom=%.4g", s_val, max_rom)
         return None
 
-    # --- Closed-form solution ---
-    #   r = (S/2) * sqrt( (4(l²−e²) − S²) / (4l² − S²) )
-    r_sol = (S / 2.0) * np.sqrt((4 * (l**2 - e**2) - S**2) / (4 * l**2 - S**2))
+    r_sol = (s_val / 2.0) * np.sqrt((4 * (l**2 - e**2) - s_val**2) / (4 * l**2 - s_val**2))
 
-    # --- Validate against config bounds ---
     if not (r_min <= r_sol <= r_max):
+        logger.debug("solve_for_r: r=%.4g outside [%.4g, %.4g]", r_sol, r_min, r_max)
+        return None
+
+    if l <= r_sol + abs(e):
+        return None
+
+    term_ext = (l + r_sol) ** 2 - e**2
+    term_ret = (l - r_sol) ** 2 - e**2
+    if term_ext < 0.0 or term_ret < 0.0:
+        return None
+
+    rom_from_original = np.sqrt(term_ext) - np.sqrt(term_ret)
+    if not np.isfinite(rom_from_original):
+        return None
+
+    branch_rhs = l**2 + r_sol**2 - e**2 - 0.5 * s_val**2
+    if branch_rhs < -rom_tolerance:
         logger.debug(
-            "solve_for_r: r=%.4g outside config bounds [%.4g, %.4g]",
-            r_sol, r_min, r_max,
+            "solve_for_r: branch infeasible l=%.4g e=%.4g r=%.4g S=%.4g rhs=%.4g",
+            l, e, r_sol, s_val, branch_rhs,
         )
         return None
 
-    # --- Confirm full-rotation crank-slider geometry (l > r + |e|) ---
-    if l <= r_sol + abs(e):
+    if abs(rom_from_original - s_val) > rom_tolerance:
+        logger.debug(
+            "solve_for_r: ROM residual too high l=%.4g e=%.4g r=%.4g "
+            "(target=%.6g achieved=%.6g tol=%.3g)",
+            l, e, r_sol, s_val, rom_from_original, rom_tolerance,
+        )
         return None
 
     return r_sol
 
 
-def generate_valid_2d_mechanisms(  # Defines main generator for valid 2D mechanism designs.
-    config: Dict[str, Any], n_attempts: int = 100000  # Accepts config and optional attempt cap.
-) -> List[Dict[str, Any]]:  # Returns a list of valid design dictionaries.
-    """  # Function docstring start.
-    Generates a list of valid 2D mechanisms.  # Summarizes function purpose.
+def _accept_candidate(
+    l: float,
+    e: float,
+    r_range: Any,
+    target_rom: float,
+    qrr_range: Dict[str, float],
+    rom_tolerance: float,
+    compiled_constraints: List[Tuple[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Run full Stage-1 acceptance checks for one (l, e) candidate."""
+    r_min = r_range["min"] if isinstance(r_range, dict) else r_range[0]
+    r_max = r_range["max"] if isinstance(r_range, dict) else r_range[1]
 
-    Strategy:  # Starts high-level workflow summary.
-      1. Sample l and e from config ranges.  # Step 1 samples independent geometry variables.
-      2. Solve for r to match target ROM.  # Step 2 derives dependent variable r.
-      3. Check if r is within config bounds.  # Step 3 validates solved r range.
-      4. Check QRR constraints.  # Step 4 enforces quality/ratio constraint.
+    r_sol = solve_for_r_given_rom(l, e, target_rom, r_min, r_max, rom_tolerance=rom_tolerance)
+    if r_sol is None:
+        return None
 
-    Args:  # Starts argument documentation.
-        config: Configuration dictionary (must contain 'geometry', 'operating', 'material' etc.)  # Describes required config.
-        n_attempts: Max attempts to try.  # Documents optional attempt cap argument.
+    if not _constraints_satisfied(
+        compiled_constraints,
+        _build_constraint_context(r=r_sol, l=l, e=e, target_rom=target_rom),
+    ):
+        return None
 
-    Returns:  # Starts return documentation.
-        List of dicts with valid geometry {r, l, e, ...}  # Describes returned record structure.
-    """  # Function docstring end.
-    valid_designs = []  # Initializes collection of accepted designs.
+    metrics = kinematics.calculate_metrics(r_sol, l, e)
+    if not metrics["valid"]:
+        return None
 
-    # Extract settings  # Marks config extraction block.
-    # We expect these keys to be present in the config.  # States assumption about config schema.
-    # If not, we let it crash to signal missing config.  # Notes intended failure behavior.
-    geo_ranges = config.get("geometry")  # Reads geometry range settings.
-    op_settings = config.get("operating")  # Reads operating target settings.
-    samp_config = config.get("sampling")  # Reads sampling method settings.
+    if abs(metrics["ROM"] - target_rom) > rom_tolerance:
+        return None
 
-    if geo_ranges is None or op_settings is None or samp_config is None:  # Validates presence of required sections.
-        logger.error(  # Logs explicit error for missing configuration.
-            "Configuration is missing required sections: 'geometry', 'operating', or 'sampling'"  # Provides missing-section message.
-        )
-        return []  # Returns empty result when config is incomplete.
+    qrr = metrics["QRR"]
+    if not (qrr_range["min"] <= qrr <= qrr_range["max"]):
+        return None
 
-    # Ranges  # Marks geometry range extraction.
-    l_range = geo_ranges["l"]  # Gets allowable l range.
-    e_range = geo_ranges["e"]  # Gets allowable e range.
-    r_range = geo_ranges["r"]  # Gets allowable r bounds for solver.
-
-    # Targets  # Marks operating target extraction.
-    target_rom = op_settings["ROM"]  # Reads desired ROM target.
-    qrr_range = op_settings["QRR"]  # Reads acceptable QRR interval.
-
-    # Setup sampler for l and e  # Marks sampling setup block.
-    # We use random sampling for simplicity in this loop, or we could use LHS pre-generation.  # Notes sampling alternatives.
-    # If config says LHS, we should ideally use that.  # States intention to honor configured method.
-    # Let's support the sampling config.  # Confirms behavior is config-driven.
-
-    # Prepare ranges for sampling ONLY l and e  # Marks sampled variable definition.
-    # We do NOT sample r, we solve for it.  # Explains why r is excluded from sampler inputs.
-    param_ranges_to_sample = {  # Builds sampler range map.
-        "l": l_range,  # Includes l range in sampled parameters.
-        "e": e_range,  # Includes e range in sampled parameters.
+    return {
+        "r": r_sol,
+        "l": l,
+        "e": e,
+        "ROM": metrics["ROM"],
+        "QRR": qrr,
+        "theta_min": metrics["theta_retracted"],
+        "theta_max": metrics["theta_extended"],
     }
 
-    # Get candidate samples for l and e  # Marks sample-count selection.
-    # Note: If n_samples is specified in config, we try to produce that many VALID designs?  # Documents interpretation question.
-    # Or we treat n_samples as "candidates to try"?  # Documents alternative interpretation.
-    # Usually "n_samples" in LHS means number of candidates generated.  # Notes common convention used.
-    target_n_samples = samp_config.get("n_samples", 1000)  # Chooses candidate pool size.
 
-    # Generate candidates  # Marks candidate generation call.
-    # We are generating (l, e) pairs  # Clarifies sampled tuple content.
-    candidates = sampling.get_sampler(  # Produces sampled candidate list/iterator.
-        method=samp_config.get("method", "random"),  # Selects sampling method from config.
-        param_ranges=param_ranges_to_sample,  # Passes parameter ranges to sampler.
-        n_samples=target_n_samples,  # Requests desired number of candidates.
-        seed=config.get("random_seed", 42),  # Uses deterministic default seed when absent.
+def iter_valid_2d_mechanisms(
+    config: Dict[str, Any],
+    n_attempts: int = 100000,
+) -> Iterator[Dict[str, Any]]:
+    """
+    Generate valid Stage-1 2D mechanisms from config.
+    """
+    geo_ranges = config.get("geometry")
+    op_settings = config.get("operating")
+    samp_config = config.get("sampling")
+
+    if geo_ranges is None or op_settings is None or samp_config is None:
+        logger.error("Configuration missing required sections: geometry/operating/sampling")
+        return
+
+    l_range = geo_ranges["l"]
+    e_range = geo_ranges["e"]
+    r_range = geo_ranges["r"]
+
+    target_rom = op_settings["ROM"]
+    qrr_range = op_settings["QRR"]
+    rom_tolerance = op_settings.get("ROM_tolerance", 1e-5)
+
+    target_n_samples = samp_config.get("n_samples", 1000)
+    sampling_method = samp_config.get("method", "random")
+    sampling_seed = config.get("random_seed", 42)
+    constraint_exprs = samp_config.get("constraints", [])
+    compiled_constraints = _compile_constraints(constraint_exprs)
+
+    strict_eps = max(1e-12, rom_tolerance * 1e-3)
+    max_draws = max(n_attempts, int(target_n_samples) * 10)
+    candidates = _generate_constrained_stage1_candidates(
+        method=sampling_method,
+        n_samples=target_n_samples,
+        seed=sampling_seed,
+        l_range=l_range,
+        e_range=e_range,
+        target_rom=target_rom,
+        max_draws=max_draws,
+        strict_eps=strict_eps,
     )
 
-    for cand in candidates:  # Iterates through each sampled (l, e) candidate.
-        l = cand["l"]  # Extracts sampled l.
-        e = cand["e"]  # Extracts sampled e.
+    for cand in candidates:
+        accepted = _accept_candidate(
+            l=cand["l"],
+            e=cand["e"],
+            r_range=r_range,
+            target_rom=target_rom,
+            qrr_range=qrr_range,
+            rom_tolerance=rom_tolerance,
+            compiled_constraints=compiled_constraints,
+        )
+        if accepted is not None:
+            yield accepted
 
-        # Constraints from config (strings)  # Marks deferred constraint notes.
-        # "l >= 2.5*r" -> This involves r, so we can't check it yet?  # Explains dependency on unsolved r.
-        # Or we can check "l >= 2.5 * (ROM/2)" as a rough check?  # Mentions possible approximation.
-        # Better to solve r first, then check.  # States chosen order of operations.
 
-        # Solve for r  # Marks r-solve step.
-        r_min = r_range["min"] if isinstance(r_range, dict) else r_range[0]  # Normalizes lower bound shape.
-        r_max = r_range["max"] if isinstance(r_range, dict) else r_range[1]  # Normalizes upper bound shape.
-
-        r_sol = solve_for_r_given_rom(l, e, target_rom, r_min, r_max)  # Solves r for this candidate.
-
-        if r_sol is None:  # Checks if solver failed or no feasible root exists.
-            continue  # Skips invalid candidate.
-
-        r = r_sol  # Stores solved radius for readability.
-
-        # Now we have a full geometry (r, l, e).  # Notes full design tuple is available.
-        # Check custom constraints if any string eval is needed (unsafe but flexible)  # Notes potential future extensibility.
-        # For now, hardcode the critical ones or parse safe strings.  # Explains current conservative constraint path.
-        # "l >= 2.5*r"  # Names enforced geometric ratio constraint.
-        if l < 2.5 * r:  # Enforces minimum rod-to-crank ratio.
-            continue  # Skips candidate that violates ratio constraint.
-
-        # Verify kinematics (QRR, exact ROM check)  # Marks full metric validation step.
-        metrics = kinematics.calculate_metrics(r, l, e)  # Computes exact metrics for solved geometry.
-
-        if not metrics["valid"]:  # Rejects geometries failing kinematic validity checks.
-            continue  # Skips invalid geometry.
-
-        # Check QRR  # Marks quality ratio filtering.
-        qrr = metrics["QRR"]  # Reads computed QRR metric.
-        if not (qrr_range["min"] <= qrr <= qrr_range["max"]):  # Tests QRR against configured limits.
-            continue  # Skips candidate outside QRR bounds.
-
-        # Passed!  # Marks acceptance path.
-        design = {  # Builds output record for accepted design.
-            "r": r,  # Stores solved crank radius.
-            "l": l,  # Stores rod length.
-            "e": e,  # Stores offset.
-            "ROM": metrics["ROM"],  # Stores computed ROM.
-            "QRR": qrr,  # Stores computed QRR.
-            "theta_min": metrics["theta_retracted"],  # Stores minimum angle endpoint.
-            "theta_max": metrics["theta_extended"],  # Stores maximum angle endpoint.
-        }
-        valid_designs.append(design)  # Adds accepted design to results.
-
-    return valid_designs  # Returns all valid designs found.
+def generate_valid_2d_mechanisms(
+    config: Dict[str, Any],
+    n_attempts: int = 100000,
+) -> List[Dict[str, Any]]:
+    """
+    Generate valid Stage-1 2D mechanisms from config.
+    Returns a list for compatibility with existing callers.
+    """
+    return list(iter_valid_2d_mechanisms(config, n_attempts=n_attempts))

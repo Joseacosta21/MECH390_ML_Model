@@ -32,6 +32,7 @@ Output
 """
 
 import argparse
+import csv
 import logging
 import sys
 import os
@@ -65,6 +66,8 @@ logger = logging.getLogger("preview_stage1")
 # ---------------------------------------------------------------------------
 DEFAULT_OUT_DIR = PROJECT_ROOT / "data" / "stage1_preview"
 OUTPUT_FILENAME = "stage1_geometries.csv"
+CSV_COLUMNS = ["r", "l", "e", "ROM", "QRR", "theta_min", "theta_max"]
+DESCRIBE_MAX_ROWS = 200000
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -152,11 +155,23 @@ def run(config_path: str | None, seed: int | None, out_dir: Path) -> None:
     logger.info("Starting Stage 1 kinematic synthesis …")
     t0 = time.perf_counter()
 
-    valid_designs = stage1_kinematic.generate_valid_2d_mechanisms(config)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / OUTPUT_FILENAME
+
+    n_valid = 0
+    with out_path.open("w", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=CSV_COLUMNS)
+        writer.writeheader()
+
+        for design in stage1_kinematic.iter_valid_2d_mechanisms(config):
+            writer.writerow({k: design.get(k) for k in CSV_COLUMNS})
+            n_valid += 1
+            # Flush periodically so the CSV is visible and grows during long runs.
+            if n_valid % 1000 == 0:
+                csv_file.flush()
 
     elapsed = time.perf_counter() - t0
     n_candidates = samp.get("n_samples", "n/a")
-    n_valid      = len(valid_designs)
 
     if isinstance(n_candidates, int) and n_candidates > 0:
         acceptance_rate = n_valid / n_candidates * 100.0
@@ -178,20 +193,7 @@ def run(config_path: str | None, seed: int | None, out_dir: Path) -> None:
         )
         sys.exit(1)
 
-    # ---- Build DataFrame ---------------------------------------------------
-    df = pd.DataFrame(valid_designs)
-
-    # Canonical column order matching Stage 1 output dict keys
-    column_order = ["r", "l", "e", "ROM", "QRR", "theta_min", "theta_max"]
-    # Only keep columns that actually exist (forward-compatible)
-    df = df[[c for c in column_order if c in df.columns]]
-
-    # ---- Write CSV ---------------------------------------------------------
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / OUTPUT_FILENAME
-
-    df.to_csv(out_path, index=False, float_format="%.8g")
-    logger.info("CSV written → %s  (%d rows × %d columns)", out_path, len(df), len(df.columns))
+    logger.info("CSV written → %s  (%d rows × %d columns)", out_path, n_valid, len(CSV_COLUMNS))
 
     # ---- Quick statistics --------------------------------------------------
     print("\n" + "=" * 64)
@@ -202,9 +204,17 @@ def run(config_path: str | None, seed: int | None, out_dir: Path) -> None:
     print(f"  Elapsed time    : {elapsed:>10.2f} s")
     print(f"  Output file     : {out_path}")
     print("=" * 64)
-    print("\nDescriptive statistics:\n")
-    print(df.describe().to_string())
-    print()
+
+    if n_valid <= DESCRIBE_MAX_ROWS:
+        df = pd.read_csv(out_path)
+        print("\nDescriptive statistics:\n")
+        print(df.describe().to_string())
+        print()
+    else:
+        print(
+            f"\nDescriptive statistics skipped because row count ({n_valid}) exceeds "
+            f"{DESCRIBE_MAX_ROWS}.\n"
+        )
 
 
 # ---------------------------------------------------------------------------

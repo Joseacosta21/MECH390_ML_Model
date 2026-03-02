@@ -78,6 +78,51 @@ class TestKinematicsAndDatagen(unittest.TestCase):
         self.assertNotEqual(metrics['QRR'], 1.0, "QRR for offset mechanism should not be exactly 1.0")
         self.assertTrue(metrics['QRR'] > 0, "QRR should be positive")
 
+    def test_stage1_constrained_candidate_sampling(self):
+        """Constrained Stage-1 candidate sampler should enforce pre-feasibility inequalities."""
+        config = get_baseline_config()
+        target_rom = config['operating']['ROM']
+        l_range = config['geometry']['l']
+        e_range = config['geometry']['e']
+
+        for method in ["random", "latin_hypercube"]:
+            with self.subTest(method=method):
+                candidates = stage1_kinematic._generate_constrained_stage1_candidates(
+                    method=method,
+                    n_samples=100,
+                    seed=123,
+                    l_range=l_range,
+                    e_range=e_range,
+                    target_rom=target_rom,
+                    max_draws=2000,
+                    strict_eps=1e-12,
+                )
+
+                self.assertGreater(len(candidates), 0, "Expected at least one feasible constrained candidate")
+
+                for cand in candidates:
+                    l = cand["l"]
+                    e = cand["e"]
+
+                    self.assertLess(abs(e), l, "Constrained sampler must enforce |e| < l")
+                    self.assertLess(target_rom, 2.0 * l, "Constrained sampler must enforce S < 2l")
+                    self.assertLess(
+                        target_rom,
+                        2.0 * np.sqrt(l**2 - e**2),
+                        "Constrained sampler must enforce S < 2*sqrt(l^2-e^2)",
+                    )
+
+    def test_stage1_respects_sampling_constraints_from_config(self):
+        """Stage-1 must enforce sampling.constraints expressions from config."""
+        config = get_baseline_config()
+        config['sampling']['method'] = 'random'
+        config['sampling']['n_samples'] = 2000
+        # Impossible with current baseline bounds.
+        config['sampling']['constraints'] = ["l >= 100*r"]
+
+        rows = stage1_kinematic.generate_valid_2d_mechanisms(config)
+        self.assertEqual(len(rows), 0, "Expected zero valid designs for impossible constraints")
+
     def test_slider_returns_vector(self):
         """Slider pos/vel/acc must return np.ndarray of shape (2,) with y == 0."""
         r, l, e, theta, omega = 0.1, 0.4, 0.02, np.pi / 4, 10.0

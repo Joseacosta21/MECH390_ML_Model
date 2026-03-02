@@ -41,13 +41,10 @@ def slider_position(theta: float, r: float, l: float, e: float) -> np.ndarray:
 
     # Check for physical validity
     if np.any(term_under_sqrt < 0):
-        if np.isscalar(term_under_sqrt):
-            raise ValueError(
-                f"Geometry violation: l={l}, r={r}, e={e}, theta={theta}. "
-                f"Term under sqrt {term_under_sqrt} is negative."
-            )
-        else:
-            pass
+        raise ValueError(
+            f"Geometry violation: l={l}, r={r}, e={e}, theta={theta}. "
+            f"Term under sqrt {term_under_sqrt} is negative."
+        )
 
     x_C = r * np.cos(theta) + np.sqrt(term_under_sqrt)
     return np.array([x_C, 0.0])
@@ -203,10 +200,14 @@ def get_dead_center_angles(r: float, l: float, e: float):
     """
 
     def velocity_proxy(theta):
-        # Returns x-component of slider velocity (proportional to velocity scalar)
-        if abs(r * np.sin(theta) + e) >= l:
+        # Returns scalar dx/dtheta for robust root finding.
+        sin_t = np.sin(theta)
+        cos_t = np.cos(theta)
+        u = r * sin_t + e
+        if abs(u) >= l:
             return np.nan
-        return slider_velocity(theta, 1.0, r, l, e)[0]  # index [0] for scalar
+        sq_term = np.sqrt(l**2 - u**2)
+        return -r * sin_t - (r * cos_t * u) / sq_term
 
     # Sweep [0, 2pi) at 1-degree resolution to bracket roots
     thetas = np.linspace(0, 2*np.pi, 360)
@@ -237,7 +238,7 @@ def get_dead_center_angles(r: float, l: float, e: float):
     roots = np.unique(np.array(roots) % (2*np.pi))
 
     if len(roots) != 2:
-        pass
+        return np.array([])
 
     return np.sort(roots)
 
@@ -304,3 +305,4 @@ def calculate_metrics(r: float, l: float, e: float) -> dict:
         'x_min': x_min,
         'x_max': x_max
     }
+
