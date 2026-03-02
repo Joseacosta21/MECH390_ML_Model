@@ -1,94 +1,122 @@
 """
-Stage 2: 3D Embodiment Expansion.
-Expands valid 2D mechanisms into 3D designs by sampling component dimensions.
+Stage 2: 3D embodiment expansion.
+Expands valid 2D mechanisms into multiple 3D variants with geometric constraints.
 """
 
+from __future__ import annotations
+
+from typing import Any, Dict, Iterable, Iterator, List
+
 import numpy as np
-from typing import List, Dict, Any
+
+from mech390 import config as config_utils
 from mech390.datagen import sampling
 
-def expand_to_3d(valid_2d_designs: List[Dict[str, float]], config: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """
-    Expands a list of valid 2D designs into 3D embodiments.
-    
-    Args:
-        valid_2d_designs: List of dicts having at least r, l, e.
-        config: Full configuration dictionary.
-        
-    Returns:
-        List of expanded design dictionaries.
-    """
-    expanded_designs = []
-    
-    # Identify 3D parameters to sample
-    # We look for them in 'geometry' section or a dedicated 'embodiment' section
-    geo_config = config.get('geometry', {})
-    
-    # Potential 3D keys (canonical names we support)
-    keys_3d = ['link_thickness', 'link_width', 'pin_diameter', 'density']
-    
-    # Also include any other keys in geometry that are ranges but not r, l, e
-    # (Flexible adaption)
-    known_2d = ['r', 'l', 'e', 'slider']
-    
-    param_ranges = {}
-    
-    # 1. Explicit keys from internal list, if present in config
-    for k in keys_3d:
-        if k in geo_config:
-             param_ranges[k] = geo_config[k]
+_SUPPORTED_METHODS = {"random", "latin_hypercube"}
 
-    # 2. Any other keys in geometry that look like parameters
-    for k, v in geo_config.items():
-        if k not in known_2d and k not in param_ranges:
-             param_ranges[k] = v
-             
-    # If no 3D params found, should we add defaults?
-    # For now, we assume config will conduct this. 
-    # If empty, we just pass through (maybe just density is needed).
-    
-    # Material props might be in 'material' section
-    mat_config = config.get('material', {})
-    if 'rho' in mat_config:
-         param_ranges['density'] = mat_config['rho']
-         
-    # Setup sampler stuff
-    # We iterate through each 2D design and generate *one* or *more* 3D variants?
-    # Instructions: "Expands each into multiple 3D variants."
-    # How many? Maybe `n_variants_per_2d`? Or just 1?
-    # Let's assume 1 for now unless config says otherwise, or maybe the sampling happens *per* design.
-    
-    # Actually, if we want to do LHS interaction between 2D and 3D, we should have done it in one go.
-    # But strict staging means we take a 2D result and "dress" it.
-    # Simple approach: For each 2D, sample ONE set of 3D params.
-    # If we want multiple, we can loop.
-    
-    sampler_method = config.get('sampling', {}).get('method', 'random')
-    seed = config.get('random_seed', 42)
-    
-    rng = np.random.RandomState(seed)
-    
-    for design_2d in valid_2d_designs:
-        # Create a copy to avoid mutating original if reused
-        design_3d = design_2d.copy()
-        
-        # Sample 3D params
-        for param_name, param_def in param_ranges.items():
-            # We use a local sample here (random) because LHS across this conditional set is hard
-            # unless we structured it differently.
-            # Using simple random sample for now relative to the range definition.
-            val = sampling.sample_scalar(param_def, seed=None) # Use global/shared RNG state if passed? 
-            # Actually sample_scalar uses `random` module state if seed is None.
-            # We should be consistent.
-            # For strict determinism, we should pass a generator or seed.
-            # But `sample_scalar` takes a seed int, not a generator.
-            # Let's rely on `random` state being managed by the caller (generate.py setting seed).
-            design_3d[param_name] = val
-            
-        # TODO: Calculate mass and moments of inertia (Izz).
-        
-        # TODO: Shape approximation.
-        
-        expanded_designs.append(design_3d)
-        
-    return expanded_designs
+
+def _passes_width_pin_constraints(candidate: Dict[str, float]) -> bool:
+    """Enforce strict Stage-2 width/pin feasibility constraints."""
+    return (
+        candidate["width_r"] > candidate["pin_diameter_A"]
+        and candidate["width_r"] > candidate["pin_diameter_B"]
+        and candidate["width_l"] > candidate["pin_diameter_B"]
+        and candidate["width_l"] > candidate["pin_diameter_C"]
+    )
+
+
+def _iter_stage2_candidates(
+    method: str,
+    param_ranges: Dict[str, Dict[str, float]],
+    max_attempts: int,
+    seed: int,
+) -> Iterator[Dict[str, float]]:
+    """Yield at most max_attempts candidate parameter sets for one 2D design."""
+    if method == "random":
+        rng = np.random.default_rng(seed)
+        names = sorted(param_ranges.keys())
+        for _ in range(max_attempts):
+            yield {
+                name: float(rng.uniform(param_ranges[name]["min"], param_ranges[name]["max"]))
+                for name in names
+            }
+        return
+
+    if method == "latin_hypercube":
+        lhs_rows = sampling.get_sampler(
+            method="latin_hypercube",
+            param_ranges=param_ranges,
+            n_samples=max_attempts,
+            seed=seed,
+        )
+        for row in lhs_rows:
+            yield {k: float(v) for k, v in row.items()}
+        return
+
+    raise ValueError(
+        f"Unsupported Stage-2 sampling method '{method}'. "
+        f"Supported methods: {sorted(_SUPPORTED_METHODS)}."
+    )
+
+
+def iter_expand_to_3d(
+    valid_2d_designs: Iterable[Dict[str, float]],
+    config: Dict[str, Any],
+) -> Iterator[Dict[str, Any]]:
+    """
+    Streaming Stage-2 expansion: for each valid 2D design, emit many valid 3D variants.
+    """
+    param_ranges = config_utils.get_stage2_param_ranges(config)
+    stage2_sampling = config_utils.get_stage2_sampling_settings(config)
+    n_variants_per_2d = stage2_sampling["n_variants_per_2d"]
+    max_attempts = stage2_sampling["stage2_max_attempts_per_2d"]
+
+    sampling_method = config.get("sampling", {}).get("method", "random")
+    if sampling_method not in _SUPPORTED_METHODS:
+        raise ValueError(
+            f"Unsupported Stage-2 sampling method '{sampling_method}'. "
+            f"Use one of: {sorted(_SUPPORTED_METHODS)}."
+        )
+
+    base_seed = int(config.get("random_seed", 42))
+
+    for design_idx, design_2d in enumerate(valid_2d_designs):
+        accepted = 0
+        design_seed = base_seed + design_idx * 9973
+
+        for candidate in _iter_stage2_candidates(
+            method=sampling_method,
+            param_ranges=param_ranges,
+            max_attempts=max_attempts,
+            seed=design_seed,
+        ):
+            if not _passes_width_pin_constraints(candidate):
+                continue
+
+            design_3d: Dict[str, Any] = dict(design_2d)
+            design_3d.update(candidate)
+
+            # TODO: compute masses and inertias with mech390.physics.mass_properties.
+            # TODO: compute stresses with mech390.physics.stresses.
+
+            accepted += 1
+            yield design_3d
+            if accepted >= n_variants_per_2d:
+                break
+
+        if accepted < n_variants_per_2d:
+            raise ValueError(
+                "Stage 2 could not generate enough feasible 3D variants for "
+                f"design index {design_idx}: accepted {accepted}/{n_variants_per_2d} "
+                f"after {max_attempts} attempts. Constraints: width_r > pin_diameter_A, "
+                "width_r > pin_diameter_B, width_l > pin_diameter_B, "
+                f"width_l > pin_diameter_C. Ranges: {param_ranges}."
+            )
+
+
+def expand_to_3d(
+    valid_2d_designs: List[Dict[str, float]],
+    config: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Compatibility wrapper that materializes the streaming Stage-2 iterator."""
+    return list(iter_expand_to_3d(valid_2d_designs, config))

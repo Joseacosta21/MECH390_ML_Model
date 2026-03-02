@@ -13,6 +13,16 @@ geometry:
     length: 0.2 # slider length (m)
     width: 0.2 # slider width (m)
     height: 0.2 # slider height (m)
+  widths:
+    width_r: {min: 0.01, max: 0.02}
+    width_l: {min: 0.01, max: 0.02}
+  thicknesses:
+    thickness_r: {min: 0.01, max: 0.02}
+    thickness_l: {min: 0.01, max: 0.02}
+  pin_diameters:
+    pin_diameter_A: {min: 0.01, max: 0.02}
+    pin_diameter_B: {min: 0.01, max: 0.02}
+    pin_diameter_C: {min: 0.01, max: 0.02}
 
 
 operating:
@@ -26,6 +36,7 @@ operating:
 sampling:
   method: latin_hypercube          # latin_hypercube | random | grid
   n_samples: 20000000                # ignored for grid
+  n_variants_per_2d: 5
   constraints:
     - "r > 0"
     - "l > 0"
