@@ -53,11 +53,18 @@ No forces, masses, or stresses are evaluated at this stage.
    - `e < l` — a valid triangle must exist
    - `S < 2l` — keeps the denominator positive
    - `S < 2√(l²−e²)` — keeps the numerator positive (physical maximum stroke)
+   - `l > r + |e|` — full-rotation geometry feasibility
+
+   After solving `r`, Stage 1 also enforces branch feasibility introduced by squared algebra:
+   - `l² + r² − e² − S²/2 >= 0`
+   - residual check against the original ROM expression:
+     `|ROM_computed − ROM_target| <= ROM_tolerance`
 
 3. Dead-center positions are found via robust numerical root-finding on the velocity equation.
 4. The forward and return crank-angle spans are evaluated.
 5. The quick return ratio is computed from these angle spans.
 6. The geometry is retained only if:
+   - the ROM target is met within tolerance, and
    - the quick return ratio lies within the acceptable range.
 
 This stage produces a set of kinematically valid two-dimensional mechanisms.
