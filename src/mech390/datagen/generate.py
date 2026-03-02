@@ -90,6 +90,14 @@ def _build_summary(
     }
 
 
+def _iter_stage2_designs(valid_2d: Any, config: Dict[str, Any]):
+    """Prefer streaming Stage-2 expansion when available; fallback to list API."""
+    iter_fn = getattr(stage2_embodiment, "iter_expand_to_3d", None)
+    if callable(iter_fn):
+        return iter_fn(valid_2d, config)
+    return iter(stage2_embodiment.expand_to_3d(valid_2d, config))
+
+
 def generate_dataset(config: Dict[str, Any], seed: int = None) -> DatasetResult:
     """
     Main orchestration function to generate dataset.
@@ -118,33 +126,32 @@ def generate_dataset(config: Dict[str, Any], seed: int = None) -> DatasetResult:
         return DatasetResult(pd.DataFrame(), pd.DataFrame(), {'error': 'No valid 2D'})
 
     logger.info("Starting Stage 2: Embodiment Expansion...")
-    
-    candidates_3d = stage2_embodiment.expand_to_3d(valid_2d, config)
-    
-    n_stage2 = len(candidates_3d)
-    logger.info(f"Stage 2 complete. {n_stage2} 3D candidates ready for evaluation.")
 
     logger.info("Starting Physics Evaluation...")
-    
+
     results = []
-    
+
     limits = config.get('limits', {})
     sigma_allow = limits.get('sigma_allow', 1e20)
     tau_allow = limits.get('tau_allow', 1e20)
     safety_factor = limits.get('safety_factor', 1.0)
-    
+
     sigma_limit = sigma_allow / safety_factor
     tau_limit = tau_allow / safety_factor
-    
-    for design in candidates_3d:
+
+    n_stage2 = 0
+    for design in _iter_stage2_designs(valid_2d, config):
+        n_stage2 += 1
         case = design.copy()
         metrics = _evaluate_physics(design, engine)
         case.update(metrics)
         case = _apply_limits(case, sigma_limit, tau_limit)
         results.append(case)
-        
+
+    logger.info(f"Stage 2 complete. {n_stage2} 3D candidates ready for evaluation.")
+
     df_all = pd.DataFrame(results)
-    
+
     if not df_all.empty and 'pass_fail' in df_all.columns:
         df_pass = df_all[df_all['pass_fail'] == 1].copy()
     else:

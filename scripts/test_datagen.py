@@ -16,7 +16,19 @@ config = {
         'r': {'min': 0.1, 'max': 0.2},
         'l': {'min': 0.3, 'max': 0.5},
         'e': {'min': 0.0, 'max': 0.1},
-        'link_thickness': 0.01
+        'widths': {
+            'width_r': {'min': 0.012, 'max': 0.02},
+            'width_l': {'min': 0.012, 'max': 0.02},
+        },
+        'thicknesses': {
+            'thickness_r': {'min': 0.008, 'max': 0.015},
+            'thickness_l': {'min': 0.008, 'max': 0.015},
+        },
+        'pin_diameters': {
+            'pin_diameter_A': {'min': 0.006, 'max': 0.011},
+            'pin_diameter_B': {'min': 0.006, 'max': 0.011},
+            'pin_diameter_C': {'min': 0.006, 'max': 0.011},
+        },
     },
     'operating': {
         'ROM': 0.25, # Target approx 2*r
@@ -24,10 +36,12 @@ config = {
     },
     'sampling': {
         'method': 'random',
-        'n_samples': 50
+        'n_samples': 50,
+        'n_variants_per_2d': 3,
     },
     'limits': {
         'sigma_allow': 200e6,
+        'tau_allow': 100e6,
         'safety_factor': 1.5
     },
     'random_seed': 123
