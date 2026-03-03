@@ -323,16 +323,20 @@ def _required_positive_field(
 
 def _load_design_link_inputs(design: Mapping[str, Any]) -> Dict[str, float]:
     """Load and validate required design dimensions for crank/rod/hole geometry."""
+    required_fields = (
+        ("r", "design.r"),
+        ("l", "design.l"),
+        ("width_r", "design.width_r"),
+        ("width_l", "design.width_l"),
+        ("thickness_r", "design.thickness_r"),
+        ("thickness_l", "design.thickness_l"),
+        ("pin_diameter_A", "design.pin_diameter_A"),
+        ("pin_diameter_B", "design.pin_diameter_B"),
+        ("pin_diameter_C", "design.pin_diameter_C"),
+    )
     return {
-        "r": _required_positive_field(design, "r", "design.r"),
-        "l": _required_positive_field(design, "l", "design.l"),
-        "width_r": _required_positive_field(design, "width_r", "design.width_r"),
-        "width_l": _required_positive_field(design, "width_l", "design.width_l"),
-        "thickness_r": _required_positive_field(design, "thickness_r", "design.thickness_r"),
-        "thickness_l": _required_positive_field(design, "thickness_l", "design.thickness_l"),
-        "pin_diameter_A": _required_positive_field(design, "pin_diameter_A", "design.pin_diameter_A"),
-        "pin_diameter_B": _required_positive_field(design, "pin_diameter_B", "design.pin_diameter_B"),
-        "pin_diameter_C": _required_positive_field(design, "pin_diameter_C", "design.pin_diameter_C"),
+        key: _required_positive_field(design, key, label)
+        for key, label in required_fields
     }
 
 
@@ -444,9 +448,7 @@ def crank_cog(theta: float, r: float) -> np.ndarray:
     The crank rotates about fixed pivot O (origin). Its COG is approximated
     at the midpoint between O and the crank pin B.
     """
-    pos_B = kinematics.crank_pin_position(theta, r)
-    pos_O = np.array([0.0, 0.0])  # fixed pivot at origin
-    return (pos_O + pos_B) / 2.0
+    return 0.5 * kinematics.crank_pin_position(theta, r)
 
 
 def rod_cog(theta: float, r: float, l: float, e: float) -> np.ndarray:
@@ -457,7 +459,7 @@ def rod_cog(theta: float, r: float, l: float, e: float) -> np.ndarray:
     """
     pos_B = kinematics.crank_pin_position(theta, r)
     pos_C = kinematics.slider_position(theta, r, l, e)  # [x_C, 0.0]
-    return (pos_B + pos_C) / 2.0
+    return 0.5 * (pos_B + pos_C)
 
 
 def slider_cog(theta: float, r: float, l: float, e: float) -> np.ndarray:
@@ -468,4 +470,3 @@ def slider_cog(theta: float, r: float, l: float, e: float) -> np.ndarray:
     the slider pin C.
     """
     return kinematics.slider_position(theta, r, l, e)
-
