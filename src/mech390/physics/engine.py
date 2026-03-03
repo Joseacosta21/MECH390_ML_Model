@@ -54,6 +54,11 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
     mass_crank  = design.get('mass_crank', 1.0)
     mass_rod    = design.get('mass_rod', 1.0)
     mass_slider = design.get('mass_slider', 1.0)
+    i_crank = design.get('I_mass_crank_cg_z', 1.0)
+    i_rod = design.get('I_mass_rod_cg_z', 1.0)
+    mu = design.get('mu', 0.0)
+    g = design.get('g', 9.81)
+    alpha_r = design.get('alpha_r', 0.0)
 
     # 15-degree sweep over one full revolution
     thetas = np.deg2rad(np.arange(0, 360, 15))
@@ -82,7 +87,12 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
             # --- Dynamics (forces as np.ndarray([Fx, Fy])) ---
             forces = dynamics.joint_reaction_forces(
                 theta, omega, r, l, e,
-                mass_crank, mass_rod, mass_slider
+                mass_crank, mass_rod, mass_slider,
+                I_crank=i_crank,
+                I_rod=i_rod,
+                mu=mu,
+                g=g,
+                alpha_r=alpha_r,
             )
             F_B = forces['F_B']
             F_C = forces['F_C']
