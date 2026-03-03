@@ -66,6 +66,7 @@ def solve_joint_reactions_newton_euler(
 
     r_Gr = mass_properties.crank_cog(theta, r)
     r_Gl = mass_properties.rod_cog(theta, r, l, e)
+    # Retained for upcoming slider moment formulations (future extension hook).
     r_Gs = mass_properties.slider_cog(theta, r, l, e)
 
     a_B = kinematics.crank_pin_acceleration(theta, omega, r)
@@ -88,6 +89,8 @@ def solve_joint_reactions_newton_euler(
 
     A = np.zeros((8, 8), dtype=float)
     b = np.zeros(8, dtype=float)
+    ex = np.array([1.0, 0.0], dtype=float)
+    ey = np.array([0.0, 1.0], dtype=float)
 
     # 1) Crank Fx: F_Ax + F_Bx = m_r * a_Grx
     A[0, f_ax] = 1.0
@@ -100,10 +103,10 @@ def solve_joint_reactions_newton_euler(
     b[1] = m_r * a_Gr[1] + m_r * grav
 
     # 3) Crank moment about G_r.
-    A[2, f_ax] = -r_A_Gr[1]
-    A[2, f_ay] = r_A_Gr[0]
-    A[2, f_bx] = -r_B_Gr[1]
-    A[2, f_by] = r_B_Gr[0]
+    A[2, f_ax] = _cross_z(r_A_Gr, ex)
+    A[2, f_ay] = _cross_z(r_A_Gr, ey)
+    A[2, f_bx] = _cross_z(r_B_Gr, ex)
+    A[2, f_by] = _cross_z(r_B_Gr, ey)
     A[2, tau_idx] = 1.0
     b[2] = i_r * alpha_crank
 
@@ -118,10 +121,10 @@ def solve_joint_reactions_newton_euler(
     b[4] = m_l * a_Gl[1] + m_l * grav
 
     # 6) Rod moment about G_l.
-    A[5, f_bx] = r_B_Gl[1]
-    A[5, f_by] = -r_B_Gl[0]
-    A[5, f_cx] = -r_C_Gl[1]
-    A[5, f_cy] = r_C_Gl[0]
+    A[5, f_bx] = _cross_z(r_B_Gl, -ex)
+    A[5, f_by] = _cross_z(r_B_Gl, -ey)
+    A[5, f_cx] = _cross_z(r_C_Gl, ex)
+    A[5, f_cy] = _cross_z(r_C_Gl, ey)
     b[5] = i_l * alpha_l
 
     # 7) Slider Fx: -F_Cx - mu*s*N = m_s * a_Gsx

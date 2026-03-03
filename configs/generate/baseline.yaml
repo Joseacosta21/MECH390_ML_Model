@@ -1,18 +1,18 @@
 random_seed: 42
 
-material:        # Young's modulus (Pa)
+material:
   rho: {min: 7800, max: 7800}
   yield_stress: {min: 100e6, max: 100e6}
   yield_shear_stress: {min: 100e6, max: 100e6}
 
 geometry:
-  r: {min: 0.04, max: 0.15}        # crank length (m)
-  l: {min: 0.1, max: 0.38}        # rod length (m)
+  r: {min: 0.04, max: 0.15}        # crank radius (m)
+  l: {min: 0.1, max: 0.38}         # rod length (m)
   e: {min: 0.00, max: 0.35}        # offset (m)
   slider:
-    length: 0.2 # slider length (m)
-    width: 0.2 # slider width (m)
-    height: 0.2 # slider height (m)
+    length: 0.2                     # slider length (m)
+    width: 0.2                      # slider width (m)
+    height: 0.2                     # slider height (m)
   widths:
     width_r: {min: 0.01, max: 0.02}
     width_l: {min: 0.01, max: 0.02}
@@ -27,15 +27,15 @@ geometry:
 
 operating:
   RPM: 30
-  P: .5           # load (kg)
-  mu: 0.2 # COF
-  ROM: .25 # range of motion (mm)
-  QRR: {min: 1.5, max: 2.5} # quick return ratio
-  TotalCycles: 18720000 # 5 years of operation at 30 RPM 
+  P: 0.5                          # process load placeholder (currently unused)
+  mu: 0.2                         # coefficient of friction
+  ROM: 0.25                       # range of motion (m)
+  QRR: {min: 1.5, max: 2.5}       # quick return ratio
+  TotalCycles: 18720000           # 5 years of operation at 30 RPM
 
 sampling:
   method: latin_hypercube          # latin_hypercube | random | grid
-  n_samples: 20000000                # ignored for grid
+  n_samples: 20000000              # ignored for grid
   n_variants_per_2d: 5
   constraints:
     - "r > 0"
@@ -43,12 +43,12 @@ sampling:
     - "e >= 0"
 
 sweep:
-  theta_step_deg: 15               # fixed per your requirement
+  theta_step_deg: 15               # fixed sweep step
 
 limits:
   sigma_allow: 180e6               # Pa
   tau_allow: 100e6                 # Pa
-  safety_factor: 1.0               # set 1.2 etc if you want margin
+  safety_factor: 1.0
 
 output:
   csv_all: "all_cases.csv"
