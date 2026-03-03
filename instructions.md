@@ -58,24 +58,29 @@ Any design that violates these constraints is invalid and must never reach stres
 
 - `r` : crank radius
 - `l` : connecting rod length
-- `D` : offset (vertical distance from crank pivot to slider line)
-- `θ` : crank angle
-- `ω` : angular speed (constant)
+- `D` (code key `e`) : offset (vertical distance from crank pivot to slider line)
+- `θ` (code key `theta`) : crank angle
+- `ω` (code key `omega`) : angular speed (constant)
 
 ### 3.2 3D embodiment variables (examples, extensible)
 
-- link thickness
-- link width
-- link height
-- pin diameter
-- material density
+- `w_r` (code key `width_r`) : crank width
+- `t_r` (code key `thickness_r`) : crank thickness
+- `w_l` (code key `width_l`) : rod width
+- `t_l` (code key `thickness_l`) : rod thickness
+- `d_A` (code key `pin_diameter_A`) : pin diameter at A
+- `d_B` (code key `pin_diameter_B`) : pin diameter at B
+- `d_C` (code key `pin_diameter_C`) : pin diameter at C
+- `ρ` (code key `material.rho`) : material density
 
 ### 3.3 Derived physical quantities
 
 - mass of each body
 - center of gravity of each body — returned as `np.ndarray([x, y])`
 - mass moment of inertia of each body
+- area moment of inertia of link/slider sections (bending properties)
 - joint reaction forces — returned as `np.ndarray([Fx, Fy])`
+- crank drive torque `τ_A` (also denoted `T` in equations; code key `tau_A`)
 - normal and shear stresses
 
 ---
@@ -109,12 +114,22 @@ NO dynamics. NO stresses.
 
 Operations:
 
-1. Generate 3D geometry variants
-2. Compute mass and inertia
-3. Evaluate dynamics every 15°
-4. Compute stresses
-5. Track maximum stress values
-6. Apply pass/fail criteria
+1. Generate multiple 3D geometry variants for each valid 2D mechanism
+2. Sample widths, thicknesses, and pin diameters from config-defined ranges
+3. Enforce Stage-2 geometric constraints:
+   - `width_r > pin_diameter_A`
+   - `width_r > pin_diameter_B`
+   - `width_l > pin_diameter_B`
+   - `width_l > pin_diameter_C`
+4. Compute mass and inertia properties
+5. Evaluate dynamics every 15° using a Newton–Euler linear solve that returns:
+   - `F_A`, `F_B`, `F_C` (joint reactions)
+   - `N`, `F_f` (slider normal + kinetic Coulomb friction)
+   - `tau_A` (required crank torque)
+   - compatibility alias `F_O = F_A`
+6. Compute stresses
+7. Track maximum stress values
+8. Apply pass/fail criteria
 
 ---
 
@@ -189,7 +204,9 @@ Each dataset row MUST include:
 
 - `r, l, D`
 - all 3D geometry parameters
-- mass and inertia properties
+- mass properties
+- mass moments of inertia
+- area moments of inertia used in stress calculations
 
 ### Outputs
 
@@ -225,8 +242,11 @@ Each config file:
 
 - defines sampling ranges
 - defines constraints
+- can define Stage-2 embodiment controls (`n_variants_per_2d`, optional retry cap)
 - defines output paths
 - contains NO physics logic
+
+Configuration loading is responsible for numeric normalization and range validation.
 
 ---
 
@@ -252,8 +272,9 @@ src/
   - NO randomness
 
 - `dynamics.py`
-  - Newton–Euler equations
-  - Joint reaction forces — returned as `np.ndarray([Fx, Fy])`
+  - Newton–Euler 8x8 linear system solve per crank angle
+  - Returns joint reactions `F_A`, `F_B`, `F_C` as `np.ndarray([Fx, Fy])`
+  - Also returns `N`, `F_f`, and `tau_A` with compatibility alias `F_O`
   - Uses outputs from kinematics
 
 - `stresses.py`
@@ -268,7 +289,9 @@ src/
 
 - `mass_properties.py`
   - Center-of-gravity positions — returned as `np.ndarray([x, y])`
-  - Mass moments of inertia (scalar `Izz`) for crank, rod, and slider
+  - Modular mass/inertia helpers for link and slider bodies with pin holes
+  - Design-level aggregator `compute_design_mass_properties(...)`
+  - Link area moments reported with `Iyy` and `Izz`
 
 ---
 
@@ -290,11 +313,13 @@ src/
   - Applies ROM and QRR constraints
 
 - `stage2_embodiment.py`
-  - Expands 2D mechanisms into 3D
-  - Computes mass/inertia
+  - Expands each valid 2D mechanism into multiple 3D variants
+  - Supports streaming iterator-style generation for large runs
+  - Enforces width/pin feasibility constraints during sampling
 
 - `generate.py`
   - High-level data generation pipeline
+  - Consumes Stage-2 designs incrementally (streaming-capable)
   - Writes CSV outputs
 
 ---
