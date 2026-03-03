@@ -13,6 +13,10 @@ from mech390 import config as config_utils
 from mech390.datagen import sampling
 
 _SUPPORTED_METHODS = {"random", "latin_hypercube"}
+_CONSTRAINT_TEXT = (
+    "width_r > pin_diameter_A, width_r > pin_diameter_B, "
+    "width_l > pin_diameter_B, width_l > pin_diameter_C"
+)
 
 
 def _passes_width_pin_constraints(candidate: Dict[str, float]) -> bool:
@@ -71,7 +75,10 @@ def iter_expand_to_3d(
     n_variants_per_2d = stage2_sampling["n_variants_per_2d"]
     max_attempts = stage2_sampling["stage2_max_attempts_per_2d"]
 
-    sampling_method = config.get("sampling", {}).get("method", "random")
+    sampling_cfg = config.get("sampling", {})
+    if sampling_cfg is None:
+        sampling_cfg = {}
+    sampling_method = sampling_cfg.get("method", "random")
     if sampling_method not in _SUPPORTED_METHODS:
         raise ValueError(
             f"Unsupported Stage-2 sampling method '{sampling_method}'. "
@@ -108,9 +115,8 @@ def iter_expand_to_3d(
             raise ValueError(
                 "Stage 2 could not generate enough feasible 3D variants for "
                 f"design index {design_idx}: accepted {accepted}/{n_variants_per_2d} "
-                f"after {max_attempts} attempts. Constraints: width_r > pin_diameter_A, "
-                "width_r > pin_diameter_B, width_l > pin_diameter_B, "
-                f"width_l > pin_diameter_C. Ranges: {param_ranges}."
+                f"after {max_attempts} attempts. Constraints: {_CONSTRAINT_TEXT}. "
+                f"Ranges: {param_ranges}."
             )
 
 
