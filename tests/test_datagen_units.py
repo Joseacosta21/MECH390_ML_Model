@@ -8,8 +8,7 @@ from unittest.mock import patch
 # Ensure src is in path
 sys.path.append(os.path.abspath('src'))
 
-from mech390.physics import kinematics
-from mech390.physics import mass_properties
+from mech390.physics import dynamics, kinematics, mass_properties
 from mech390.datagen import generate, stage1_kinematic, stage2_embodiment
 from mech390.config import get_baseline_config
 
@@ -272,6 +271,41 @@ class TestKinematicsAndDatagen(unittest.TestCase):
         self.assertEqual(len(result.all_cases), 2)
         self.assertIn("pass_fail", result.all_cases.columns)
 
+    def test_generate_dataset_injects_mu_from_config(self):
+        """Dataset generation should inject operating.mu into each evaluated design."""
+        seen_mu = []
+
+        def fake_eval(design, _engine):
+            seen_mu.append(design.get("mu"))
+            return {
+                "valid_physics": True,
+                "sigma_max": 0.0,
+                "tau_max": 0.0,
+                "theta_sigma_max": 0.0,
+                "theta_tau_max": 0.0,
+            }
+
+        config = {
+            "random_seed": 7,
+            "operating": {"mu": 0.37},
+            "limits": {"sigma_allow": 180e6, "tau_allow": 100e6, "safety_factor": 1.0},
+        }
+
+        with patch(
+            "mech390.datagen.generate.stage1_kinematic.generate_valid_2d_mechanisms",
+            return_value=[{"r": 0.1, "l": 0.4, "e": 0.02}],
+        ), patch(
+            "mech390.datagen.generate.stage2_embodiment.iter_expand_to_3d",
+            return_value=iter([{"r": 0.1, "l": 0.4, "e": 0.02}]),
+        ), patch(
+            "mech390.datagen.generate._evaluate_physics",
+            side_effect=fake_eval,
+        ):
+            result = generate.generate_dataset(config)
+
+        self.assertEqual(seen_mu, [0.37])
+        self.assertAlmostEqual(result.all_cases.iloc[0]["mu"], 0.37)
+
     def test_mass_properties_fixed_rho_policy(self):
         """material.rho must be fixed (scalar or min==max)."""
         cfg_scalar = {"material": {"rho": 7800}}
@@ -476,6 +510,147 @@ class TestKinematicsAndDatagen(unittest.TestCase):
         with self.assertRaises(ValueError):
             # choose e large so sin_phi magnitude >1
             kinematics.rod_angle(theta, r, l, e=l + 1.0)
+
+    def test_newton_euler_solver_residuals(self):
+        """Newton-Euler linear system residuals should be near zero."""
+        theta = 0.9
+        omega = 8.0
+        r, l, e = 0.08, 0.32, 0.03
+        m_r, m_l, m_s = 1.2, 1.6, 2.0
+        i_r, i_l = 0.02, 0.03
+        mu = 0.2
+        g = 9.81
+        alpha_r = 0.0
+
+        out = dynamics.solve_joint_reactions_newton_euler(
+            theta=theta,
+            omega=omega,
+            r=r,
+            l=l,
+            e=e,
+            mass_crank=m_r,
+            mass_rod=m_l,
+            mass_slider=m_s,
+            I_crank=i_r,
+            I_rod=i_l,
+            mu=mu,
+            g=g,
+            alpha_r=alpha_r,
+            v_eps=1e-9,
+        )
+
+        F_A = out["F_A"]
+        F_B = out["F_B"]
+        F_C = out["F_C"]
+        N = out["N"]
+        tau_A = out["tau_A"]
+
+        r_A = np.array([0.0, 0.0])
+        r_B = kinematics.crank_pin_position(theta, r)
+        r_C = kinematics.slider_position(theta, r, l, e)
+        r_Gr = mass_properties.crank_cog(theta, r)
+        r_Gl = mass_properties.rod_cog(theta, r, l, e)
+
+        a_B = kinematics.crank_pin_acceleration(theta, omega, r)
+        a_C = kinematics.slider_acceleration(theta, omega, r, l, e)
+        a_Gr = 0.5 * a_B
+        a_Gl = 0.5 * (a_B + a_C)
+        a_Gs = a_C
+
+        alpha_l = kinematics.rod_angular_acceleration(theta, omega, r, l, e, alpha2=alpha_r)
+        v_sx = float(kinematics.slider_velocity(theta, omega, r, l, e)[0])
+        s = 0.0 if abs(v_sx) <= 1e-9 else np.sign(v_sx)
+
+        r_A_Gr = r_A - r_Gr
+        r_B_Gr = r_B - r_Gr
+        r_B_Gl = r_B - r_Gl
+        r_C_Gl = r_C - r_Gl
+
+        residuals = np.array(
+            [
+                F_A[0] + F_B[0] - m_r * a_Gr[0],
+                F_A[1] + F_B[1] - (m_r * a_Gr[1] + m_r * g),
+                (r_A_Gr[0] * F_A[1] - r_A_Gr[1] * F_A[0])
+                + (r_B_Gr[0] * F_B[1] - r_B_Gr[1] * F_B[0])
+                + tau_A
+                - i_r * alpha_r,
+                -F_B[0] + F_C[0] - m_l * a_Gl[0],
+                -F_B[1] + F_C[1] - (m_l * a_Gl[1] + m_l * g),
+                (-r_B_Gl[0] * F_B[1] + r_B_Gl[1] * F_B[0])
+                + (r_C_Gl[0] * F_C[1] - r_C_Gl[1] * F_C[0])
+                - i_l * alpha_l,
+                -F_C[0] - mu * s * N - m_s * a_Gs[0],
+                -F_C[1] + N - (m_s * a_Gs[1] + m_s * g),
+            ]
+        )
+        np.testing.assert_allclose(residuals, np.zeros_like(residuals), atol=1e-8, rtol=1e-8)
+
+    def test_joint_reaction_wrapper_back_compat_keys(self):
+        """Compatibility wrapper must still return legacy keys and F_O alias."""
+        out = dynamics.joint_reaction_forces(
+            theta=0.8,
+            omega=6.0,
+            r=0.08,
+            l=0.32,
+            e=0.03,
+            mass_crank=1.0,
+            mass_rod=1.1,
+            mass_slider=1.3,
+            I_crank=0.02,
+            I_rod=0.03,
+            mu=0.2,
+        )
+
+        for key in ["F_A", "F_B", "F_C", "F_O"]:
+            self.assertIn(key, out)
+            self.assertIsInstance(out[key], np.ndarray)
+            self.assertEqual(out[key].shape, (2,))
+
+        np.testing.assert_allclose(out["F_O"], out["F_A"])
+        self.assertTrue(np.isfinite(out["tau_A"]))
+
+    def test_friction_sign_flips_with_slider_velocity_direction(self):
+        """Friction sign should flip when slider velocity sign flips."""
+        common = {
+            "omega": 8.0,
+            "r": 0.08,
+            "l": 0.32,
+            "e": 0.03,
+            "mass_crank": 1.1,
+            "mass_rod": 1.2,
+            "mass_slider": 1.4,
+            "I_crank": 0.02,
+            "I_rod": 0.03,
+            "mu": 0.25,
+            "v_eps": 1e-9,
+        }
+        theta_neg = 1.0
+        theta_pos = 4.5
+
+        out_neg = dynamics.solve_joint_reactions_newton_euler(theta=theta_neg, **common)
+        out_pos = dynamics.solve_joint_reactions_newton_euler(theta=theta_pos, **common)
+
+        v_neg = float(kinematics.slider_velocity(theta_neg, common["omega"], common["r"], common["l"], common["e"])[0])
+        v_pos = float(kinematics.slider_velocity(theta_pos, common["omega"], common["r"], common["l"], common["e"])[0])
+
+        self.assertLess(v_neg, 0.0)
+        self.assertGreater(v_pos, 0.0)
+        self.assertGreater(out_neg["F_f"], 0.0)
+        self.assertLess(out_pos["F_f"], 0.0)
+
+    def test_newton_euler_invalid_geometry_raises(self):
+        """Invalid geometry should fail clearly in the dynamics solver."""
+        with self.assertRaises(ValueError):
+            dynamics.solve_joint_reactions_newton_euler(
+                theta=0.5,
+                omega=6.0,
+                r=0.1,
+                l=0.09,
+                e=0.2,
+                mass_crank=1.0,
+                mass_rod=1.0,
+                mass_slider=1.0,
+            )
 
 
 if __name__ == '__main__':

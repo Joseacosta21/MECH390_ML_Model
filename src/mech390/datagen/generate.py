@@ -135,6 +135,7 @@ def generate_dataset(config: Dict[str, Any], seed: int = None) -> DatasetResult:
     sigma_allow = limits.get('sigma_allow', 1e20)
     tau_allow = limits.get('tau_allow', 1e20)
     safety_factor = limits.get('safety_factor', 1.0)
+    mu_default = float(config.get('operating', {}).get('mu', 0.0))
 
     sigma_limit = sigma_allow / safety_factor
     tau_limit = tau_allow / safety_factor
@@ -142,8 +143,10 @@ def generate_dataset(config: Dict[str, Any], seed: int = None) -> DatasetResult:
     n_stage2 = 0
     for design in _iter_stage2_designs(valid_2d, config):
         n_stage2 += 1
-        case = design.copy()
-        metrics = _evaluate_physics(design, engine)
+        design_eval = design.copy()
+        design_eval.setdefault("mu", mu_default)
+        case = design_eval.copy()
+        metrics = _evaluate_physics(design_eval, engine)
         case.update(metrics)
         case = _apply_limits(case, sigma_limit, tau_limit)
         results.append(case)

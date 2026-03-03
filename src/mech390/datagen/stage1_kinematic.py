@@ -246,16 +246,15 @@ def solve_for_r_given_rom(
 def _accept_candidate(
     l: float,
     e: float,
-    r_range: Any,
+    r_min: float,
+    r_max: float,
     target_rom: float,
-    qrr_range: Dict[str, float],
+    qrr_min: float,
+    qrr_max: float,
     rom_tolerance: float,
     compiled_constraints: List[Tuple[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     """Run full Stage-1 acceptance checks for one (l, e) candidate."""
-    r_min = r_range["min"] if isinstance(r_range, dict) else r_range[0]
-    r_max = r_range["max"] if isinstance(r_range, dict) else r_range[1]
-
     r_sol = solve_for_r_given_rom(l, e, target_rom, r_min, r_max, rom_tolerance=rom_tolerance)
     if r_sol is None:
         return None
@@ -274,7 +273,7 @@ def _accept_candidate(
         return None
 
     qrr = metrics["QRR"]
-    if not (qrr_range["min"] <= qrr <= qrr_range["max"]):
+    if not (qrr_min <= qrr <= qrr_max):
         return None
 
     return {
@@ -306,19 +305,23 @@ def iter_valid_2d_mechanisms(
     l_range = geo_ranges["l"]
     e_range = geo_ranges["e"]
     r_range = geo_ranges["r"]
+    r_min, r_max = _range_bounds(r_range, "r")
 
     target_rom = op_settings["ROM"]
-    qrr_range = op_settings["QRR"]
+    qrr_min, qrr_max = _range_bounds(op_settings["QRR"], "QRR")
     rom_tolerance = op_settings.get("ROM_tolerance", 1e-5)
 
-    target_n_samples = samp_config.get("n_samples", 1000)
+    target_n_samples = int(samp_config.get("n_samples", 1000))
+    if target_n_samples <= 0:
+        return
+
     sampling_method = samp_config.get("method", "random")
     sampling_seed = config.get("random_seed", 42)
-    constraint_exprs = samp_config.get("constraints", [])
+    constraint_exprs = samp_config.get("constraints", []) or []
     compiled_constraints = _compile_constraints(constraint_exprs)
 
     strict_eps = max(1e-12, rom_tolerance * 1e-3)
-    max_draws = max(n_attempts, int(target_n_samples) * 10)
+    max_draws = max(n_attempts, target_n_samples * 10)
     candidates = _generate_constrained_stage1_candidates(
         method=sampling_method,
         n_samples=target_n_samples,
@@ -334,9 +337,11 @@ def iter_valid_2d_mechanisms(
         accepted = _accept_candidate(
             l=cand["l"],
             e=cand["e"],
-            r_range=r_range,
+            r_min=r_min,
+            r_max=r_max,
             target_rom=target_rom,
-            qrr_range=qrr_range,
+            qrr_min=qrr_min,
+            qrr_max=qrr_max,
             rom_tolerance=rom_tolerance,
             compiled_constraints=compiled_constraints,
         )

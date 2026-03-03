@@ -79,13 +79,23 @@ In Stage 2, each valid 2D mechanism is expanded into a family of three-dimension
 
 ### Process
 
-1. A standard link topology is assumed for each component.
-2. Key geometric dimensions such as thickness, width, height, and pin diameter are varied.
-3. Mass, center of gravity, and mass moments of inertia are computed from the 3D geometry.
-4. Dynamic forces are evaluated at every 15° of crank rotation.
-5. Normal and shear stresses are computed throughout the cycle.
-6. The maximum stress values over the full cycle are extracted.
-7. Each design is classified as pass or fail based on allowable stress limits.
+1. For each valid `(r, l, e)` geometry, many 3D variants are generated (controlled by `sampling.n_variants_per_2d`).
+2. Widths, thicknesses, and pin diameters are sampled from configuration ranges.
+3. Geometric feasibility constraints are enforced:
+   - `width_r > pin_diameter_A`
+   - `width_r > pin_diameter_B`
+   - `width_l > pin_diameter_B`
+   - `width_l > pin_diameter_C`
+4. Mass properties are evaluated through the modular `mass_properties` API:
+   masses, center-of-gravity vectors, mass moments, and area moments.
+5. Dynamic forces are evaluated at every 15° of crank rotation using a planar Newton–Euler solve that returns:
+   - joint reactions at A, B, and C (`F_A`, `F_B`, `F_C`)
+   - slider normal/friction (`N`, `F_f`, kinetic Coulomb)
+   - required crank torque (`tau_A`)
+   - compatibility alias `F_O = F_A`
+6. Normal and shear stresses are computed throughout the cycle.
+7. The maximum stress values over the full cycle are extracted.
+8. Each design is classified as pass or fail based on allowable stress limits.
 
 This stage generates the dataset used for machine learning.
 
@@ -130,10 +140,62 @@ They define:
 
 - geometry sampling ranges,
 - kinematic constraints,
+- stage-2 variant controls (`n_variants_per_2d`, optional retry cap),
 - stress limits,
 - output locations.
 
+Configuration loading normalizes numeric values (including scientific notation) and validates `{min,max}` ranges before sampling.
+
 Rather than listing individual designs, configuration files specify how entire families of designs are generated.
+
+---
+
+## 8. Nomenclature
+
+| Variable | Meaning | Units |
+|---|---|---|
+| `r` | Crank radius (link O-B center distance) | m |
+| `l` | Connecting rod length (link B-C center distance) | m |
+| `e` (`D`) | Offset between crank centerline and slider axis | m |
+| `theta` (`θ`) | Crank angle | rad |
+| `omega` (`ω`) | Crank angular speed | rad/s |
+| `alpha_r` (`α_r`) | Crank angular acceleration | rad/s² |
+| `phi` (`φ`) | Connecting-rod angle | rad |
+| `alpha_l` (`α_l`) | Connecting-rod angular acceleration | rad/s² |
+| `ROM` / `S` | Slider range of motion (stroke) | m |
+| `QRR` | Quick-return ratio (forward/return angle ratio) | dimensionless |
+| `x_C` | Slider x-position | m |
+| `v_Cx` | Slider x-velocity | m/s |
+| `a_Cx` | Slider x-acceleration | m/s² |
+| `mass_crank` (`m_r`) | Crank mass | kg |
+| `mass_rod` (`m_l`) | Rod mass | kg |
+| `mass_slider` (`m_s`) | Slider mass | kg |
+| `width_r` (`w_r`) | Crank link width | m |
+| `thickness_r` (`t_r`) | Crank link thickness | m |
+| `width_l` (`w_l`) | Rod link width | m |
+| `thickness_l` (`t_l`) | Rod link thickness | m |
+| `pin_diameter_A` (`d_A`) | Pin diameter at joint A | m |
+| `pin_diameter_B` (`d_B`) | Pin diameter at joint B | m |
+| `pin_diameter_C` (`d_C`) | Pin diameter at joint C | m |
+| `I_mass_crank_cg_z` | Crank mass moment of inertia about CG z-axis | kg·m² |
+| `I_mass_rod_cg_z` | Rod mass moment of inertia about CG z-axis | kg·m² |
+| `I_mass_slider_cg_z` | Slider mass moment of inertia about CG z-axis | kg·m² |
+| `Iyy`, `Izz` | Area moments of inertia of cross-section (bending) | m⁴ |
+| `F_A`, `F_B`, `F_C` | Joint reaction force vectors at joints A, B, C | N |
+| `F_O` | Compatibility alias for `F_A` | N |
+| `N` | Slider normal reaction from guide | N |
+| `F_f` | Slider friction force (kinetic Coulomb model) | N |
+| `tau_A` (`τ_A`, `T`) | Motor torque applied on the crank at A (required drive torque) | N·m |
+| `mu` (`μ`) | Coefficient of friction | dimensionless |
+| `rho` (`ρ`) | Material density | kg/m³ |
+| `g` | Gravitational acceleration | m/s² |
+| `sigma_max` | Maximum normal stress over a full cycle | Pa |
+| `tau_max` | Maximum shear stress over a full cycle | Pa |
+| `sigma_allow` | Allowable normal stress limit | Pa |
+| `tau_allow` | Allowable shear stress limit | Pa |
+| `utilization` | `max(sigma_max/sigma_allow, tau_max/tau_allow)` | dimensionless |
+| `pass_fail` | Design label (1 = pass, 0 = fail) | binary |
+| `RPM` | Crank rotational speed (input setting) | rev/min |
 
 ---
 
@@ -168,13 +230,14 @@ Each file below is listed **once** with its responsibility stated **inline**, so
 | `configs/generate/` | Data generation configurations |
 | `configs/train/` | ML training configurations |
 | `configs/optimize/` | Optimization and inference configurations |
+| `src/mech390/config.py` | Configuration loading, numeric normalization, and range validation helpers |
 | `src/mech390/physics/kinematics.py` | Position, velocity, acceleration for slider (x-axis constrained) and crank pin (2D circular motion); all quantities returned as `np.ndarray([x, y])`; ROM and QRR metrics |
-| `src/mech390/physics/dynamics.py` | Newton–Euler joint reaction forces; forces returned as `np.ndarray([Fx, Fy])` |
-| `src/mech390/physics/mass_properties.py` | Center-of-gravity positions (`np.ndarray([x, y])`) and mass moments of inertia for each link |
+| `src/mech390/physics/dynamics.py` | Newton–Euler 8x8 joint-reaction solver (`A/B/C`, `N`, `F_f`, `tau_A`) with compatibility key `F_O` |
+| `src/mech390/physics/mass_properties.py` | Center-of-gravity vectors, masses, mass moments, and area moments (`Iyy`, `Izz`) with a design-level aggregator |
 | `src/mech390/physics/stresses.py` | Normal and shear stress calculations |
 | `src/mech390/physics/engine.py` | 15° crank-angle sweep; orchestrates kinematics → dynamics → stresses; tracks peak sigma and tau |
 | `src/mech390/datagen/stage1_kinematic.py` | 2D kinematic synthesis using exact closed-form r formula; feasibility filtering |
-| `src/mech390/datagen/stage2_embodiment.py` | 3D geometry, mass, and inertia generation |
+| `src/mech390/datagen/stage2_embodiment.py` | Multi-variant 3D embodiment generation with streaming iterator and width/pin feasibility constraints |
 | `scripts/generate_dataset.py` | CLI entry point for dataset generation |
 | `scripts/train_model.py` | CLI entry point for ML training |
 | `scripts/optimize_config.py` | CLI entry point for ML-based design evaluation |

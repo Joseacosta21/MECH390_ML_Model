@@ -13,6 +13,28 @@ import numpy as np
 from scipy.optimize import brentq
 
 
+def _slider_radicand(theta: float, r: float, l: float, e: float) -> float:
+    """Return radicand of the slider-position square-root expression."""
+    return float(l**2 - (r * np.sin(theta) + e) ** 2)
+
+
+def _slider_sqrt_term(theta: float, r: float, l: float, e: float) -> tuple[float, float]:
+    """
+    Return `(u, sqrt_term)` where:
+      u = r*sin(theta) + e
+      sqrt_term = sqrt(l^2 - u^2)
+    Raises ValueError for invalid geometry.
+    """
+    u = float(r * np.sin(theta) + e)
+    radicand = _slider_radicand(theta, r, l, e)
+    if radicand < 0.0:
+        raise ValueError(
+            f"Geometry violation: l={l}, r={r}, e={e}, theta={theta}. "
+            f"Term under sqrt {radicand} is negative."
+        )
+    return u, float(np.sqrt(radicand))
+
+
 # ---------------------------------------------------------------------------
 # Slider C — constrained to x-axis (y = 0 always)
 # ---------------------------------------------------------------------------
@@ -37,16 +59,8 @@ def slider_position(theta: float, r: float, l: float, e: float) -> np.ndarray:
     Raises:
         ValueError: If geometry constraints are violated (term under sqrt < 0).
     """
-    term_under_sqrt = l**2 - (r * np.sin(theta) + e)**2
-
-    # Check for physical validity
-    if np.any(term_under_sqrt < 0):
-        raise ValueError(
-            f"Geometry violation: l={l}, r={r}, e={e}, theta={theta}. "
-            f"Term under sqrt {term_under_sqrt} is negative."
-        )
-
-    x_C = r * np.cos(theta) + np.sqrt(term_under_sqrt)
+    _, sq_term = _slider_sqrt_term(theta, r, l, e)
+    x_C = r * np.cos(theta) + sq_term
     return np.array([x_C, 0.0])
 
 
@@ -67,9 +81,9 @@ def slider_velocity(theta: float, omega: float, r: float, l: float, e: float) ->
     Returns:
         np.ndarray: Slider velocity vector [v_Cx, 0.0].
     """
-    sq_term = np.sqrt(l**2 - (r * np.sin(theta) + e)**2)
+    u, sq_term = _slider_sqrt_term(theta, r, l, e)
     # dx/dtheta = -r*sin(theta) - (r*cos(theta)*(r*sin(theta) + e)) / sqrt(...)
-    dx_dtheta = -r * np.sin(theta) - (r * np.cos(theta) * (r * np.sin(theta) + e)) / sq_term
+    dx_dtheta = -r * np.sin(theta) - (r * np.cos(theta) * u) / sq_term
     v_Cx = dx_dtheta * omega
     return np.array([v_Cx, 0.0])
 
@@ -109,8 +123,7 @@ def slider_acceleration(theta: float, omega: float, r: float, l: float, e: float
 
     sin_t = np.sin(theta)
     cos_t = np.cos(theta)
-    u = r * sin_t + e
-    S = np.sqrt(l**2 - u**2)
+    u, S = _slider_sqrt_term(theta, r, l, e)
 
     term1 = -r * cos_t
 
@@ -185,12 +198,12 @@ def crank_pin_acceleration(theta: float, omega: float, r: float) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Helper helpers derived from vector formulation provided by user notes
+# Helper relations derived from vector formulation
 # ---------------------------------------------------------------------------
 
 def rod_angle(theta: float, r: float, l: float, e: float) -> float:
     """
-    Compute the connecting-rod orientation \phi measured from the positive
+    Compute the connecting-rod orientation phi measured from the positive
     x-axis (i.e. the angle between link BC and the slider axis).
 
     The user derivation gives
@@ -225,16 +238,16 @@ def rod_angle(theta: float, r: float, l: float, e: float) -> float:
 
 def rod_angular_velocity(theta: float, omega: float, r: float, l: float, e: float) -> float:
     """
-    Relative angular speed of the connecting rod about pin B (\omega_{C/B}).
+    Relative angular speed of the connecting rod about pin B.
 
     Derived from the condition that the slider moves purely horizontally
     (V_{Cy}=0) and using
 
-        V_B = [\omega r sin\theta, \omega r cos\theta]
+        V_B = [omega * r * sin(theta), omega * r * cos(theta)]
 
     so
 
-        \omega_{C/B} = -V_{By} / (l cos\phi)
+        omega_cb = -V_By / (l * cos(phi))
 
     Args:
         theta: crank angle [rad]
@@ -257,15 +270,15 @@ def rod_angular_acceleration(
     alpha2: float = 0.0,
 ) -> float:
     """
-    Angular acceleration of the connecting rod about pin B (\alpha_{C/B}).
+    Angular acceleration of the connecting rod about pin B.
 
     Using the slider constraint (a_{Cy}=0) and the previously derived
     expressions, we obtain
 
-        \alpha_{C/B} = (\omega_{C/B}^2 l sin\phi - a_{By})/(l cos\phi)
+        alpha_cb = (omega_cb^2 * l * sin(phi) - a_By) / (l * cos(phi))
 
     where
-        a_{By} = -\alpha_2 r cos\theta - \omega^2 r sin\theta
+        a_By = -alpha2 * r * cos(theta) - omega^2 * r * sin(theta)
 
     ``alpha2`` is the crank angular acceleration (default zero for constant
     speed).  The sign conventions follow the CW positive orientation used
@@ -290,8 +303,8 @@ def get_dead_center_angles(r: float, l: float, e: float):
         r, l, e: geometric parameters
 
     Returns:
-        tuple: (theta_retracted, theta_extended) in range [0, 2pi), sorted.
-        Returns None if roots cannot be found (invalid geometry).
+        np.ndarray of two sorted roots in [0, 2pi), or empty array when
+        dead centers cannot be found.
     """
 
     def velocity_proxy(theta):
@@ -306,16 +319,7 @@ def get_dead_center_angles(r: float, l: float, e: float):
 
     # Sweep [0, 2pi) at 1-degree resolution to bracket roots
     thetas = np.linspace(0, 2*np.pi, 360)
-    vals = []
-
-    for th in thetas:
-        try:
-            v = velocity_proxy(th)
-            vals.append(v)
-        except (ValueError, ArithmeticError):
-            vals.append(np.nan)
-
-    vals = np.array(vals)
+    vals = np.array([velocity_proxy(th) for th in thetas], dtype=float)
 
     # Identify sign changes (bracket roots)
     roots = []
@@ -400,4 +404,3 @@ def calculate_metrics(r: float, l: float, e: float) -> dict:
         'x_min': x_min,
         'x_max': x_max
     }
-
