@@ -10,9 +10,9 @@ geometry:
   l: {min: 0.1, max: 0.38}         # rod length (m)
   e: {min: 0.00, max: 0.35}        # offset (m)
   slider:
-    length: 0.2                     # slider length (m)
-    width: 0.2                      # slider width (m)
-    height: 0.2                     # slider height (m)
+    length: 0.2
+    width: 0.2
+    height: 0.2
   widths:
     width_r: {min: 0.005, max: 0.02}
     width_l: {min: 0.005, max: 0.02}
@@ -27,15 +27,15 @@ geometry:
 
 operating:
   RPM: 30
-  P: 0.5                          # process load placeholder (currently unused)
-  mu: 0.2                         # coefficient of friction
-  ROM: 0.25                       # range of motion (m)
-  QRR: {min: 1.5, max: 2.5}       # quick return ratio
-  TotalCycles: 18720000           # 5 years of operation at 30 RPM
+  P: 0.5
+  mu: 0.2
+  ROM: 0.25
+  QRR: {min: 1.5, max: 2.5}
+  TotalCycles: 18720000
 
 sampling:
-  method: latin_hypercube          # latin_hypercube | random | grid
-  n_samples: 20000000              # ignored for grid
+  method: latin_hypercube
+  n_samples: 1000              # small test run
   n_variants_per_2d: 5
   constraints:
     - "r > 0"
@@ -43,11 +43,11 @@ sampling:
     - "e >= 0"
 
 sweep:
-  theta_step_deg: 15               # fixed sweep step
+  theta_step_deg: 15
 
 limits:
-  sigma_allow: 180e6               # Pa
-  tau_allow: 100e6                 # Pa
+  sigma_allow: 180e6
+  tau_allow: 100e6
   safety_factor: 1.0
 
 output:
