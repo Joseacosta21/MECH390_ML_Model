@@ -4,6 +4,34 @@
 
 ---
 
+## Getting started (for teammates)
+
+This project uses **Claude Code** as its AI assistant.
+Claude is pre-configured to validate physics, check code consistency, and inspect
+data quality automatically — you do not need to know Python or mechanics to contribute.
+
+**Setup (one time):**
+1. Install [Claude Code](https://claude.ai/code)
+2. Open this repository folder in VS Code or your terminal
+3. Start Claude Code — it will automatically read `CLAUDE.md` and load all agent rules
+
+**Making a request:**
+Just describe what you want in plain English. Examples:
+
+| What you say | What Claude does automatically |
+|---|---|
+| "I changed the rod formula" | Validates physics + checks cross-references |
+| "Run the data generation and check it" | Runs pipeline, then checks the output CSV |
+| "Is the dataset ready to train?" | Inspects class balance, distributions, and size |
+| "Everything looks wrong, check the pipeline" | Runs all four validation agents in parallel |
+
+**Key files to know:**
+- `CLAUDE.md` — defines what agents are available and when they run
+- `instructions.md` — authoritative physics spec (Claude reads this for equation questions)
+- `configs/generate/baseline.yaml` — controls how data is generated
+
+---
+
 ## 1. What this repository is about
 
 This repository implements a physics-based data generation and machine learning workflow for the design and evaluation of an offset crank–slider mechanism.
@@ -124,6 +152,8 @@ From a computational standpoint:
 
 ```
 mech390-crank-slider-ml/
+├─ CLAUDE.md          # Claude Code agent definitions and mandatory rules
+├─ instructions.md    # Authoritative physics spec for developers and AI agents
 ├─ configs/           # Experiment definitions (YAML files)
 │  ├─ generate/       # Data generation configs (baseline.yaml, aggressive.yaml, test_small.yaml)
 │  ├─ train/          # ML training configs (regression.yaml, classifier.yaml)
@@ -236,7 +266,19 @@ All training data is generated using physics-based equations.
 
 ⸻
 
-## 10. Implementation status
+## 10. Known issues
+
+These bugs are confirmed and documented. They are tracked in `instructions.md` and `CLAUDE.md`.
+
+| # | File | Issue | Impact |
+|---|---|---|---|
+| 1 | `src/mech390/datagen/generate.py` | `omega` and mass properties not set in design dict before physics evaluation | Dynamics forces ~10× wrong when using `generate_dataset()` |
+| 2 | `src/mech390/physics/kinematics.py:290` | Sign error on `alpha2` in `rod_angular_acceleration` | No impact while `alpha_r=0` (default), but formula is incorrect |
+| 3 | `src/mech390/physics/mass_properties.py:208` | Pin hole offsets assume equal diameters in MOI calculation | Minor MOI error for asymmetric pin diameters |
+
+---
+
+## 11. Implementation status
 
 | Module | Status |
 |---|---|
@@ -274,6 +316,7 @@ Each file below is listed **once** with its responsibility stated **inline**.
 | Path | Description |
 |-----|-------------|
 | `README.md` | High-level project overview, workflow, nomenclature, and implementation status |
+| `CLAUDE.md` | Claude Code agent definitions, mandatory subagent rules, known issues, teammate quick-reference |
 | `instructions.md` | Authoritative technical specification for developers and AI agents |
 | `configs/` | YAML experiment definitions (no executable logic) |
 | `configs/generate/baseline.yaml` | Full-scale generation config (20M samples, LHS, 5 variants/2D) |
