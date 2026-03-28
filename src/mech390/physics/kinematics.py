@@ -278,7 +278,7 @@ def rod_angular_acceleration(
         alpha_cb = (omega_cb^2 * l * sin(phi) - a_By) / (l * cos(phi))
 
     where
-        a_By = -alpha2 * r * cos(theta) - omega^2 * r * sin(theta)
+        a_By = alpha2 * r * cos(theta) - omega^2 * r * sin(theta)
 
     ``alpha2`` is the crank angular acceleration (default zero for constant
     speed).  The sign conventions follow the CW positive orientation used
@@ -287,7 +287,7 @@ def rod_angular_acceleration(
     phi = rod_angle(theta, r, l, e)
     omega_cb = rod_angular_velocity(theta, omega, r, l, e)
     # acceleration of B (y component)
-    a_By = -alpha2 * r * np.cos(theta) - omega ** 2 * r * np.sin(theta)
+    a_By = alpha2 * r * np.cos(theta) - omega ** 2 * r * np.sin(theta)
     return (omega_cb ** 2 * l * np.sin(phi) - a_By) / (l * np.cos(phi))
 
 

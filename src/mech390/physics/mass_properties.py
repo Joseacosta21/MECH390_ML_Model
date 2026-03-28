@@ -205,8 +205,12 @@ def link_mass_moi_cg_z(
     i_h_left_center_z = _disc_moi_cg_z(m_h_left, dl)
     i_h_right_center_z = _disc_moi_cg_z(m_h_right, dr)
 
-    x_left = -0.5 * c
-    x_right = 0.5 * c
+    # Exact offsets of each pin hole center relative to the rectangular body CG.
+    # Link body length L = c + 0.5*dl + 0.5*dr; CG is at L/2 from the left end.
+    # Left hole at 0.5*dl from left end  → offset = 0.5*dl - L/2 = -0.5*c + 0.25*(dl - dr)
+    # Right hole at c + 0.5*dl from left → offset = c + 0.5*dl - L/2 =  0.5*c + 0.25*(dl - dr)
+    x_left = -0.5 * c + 0.25 * (dl - dr)
+    x_right = 0.5 * c + 0.25 * (dl - dr)
 
     i_net = (
         i_rect_cg_z
