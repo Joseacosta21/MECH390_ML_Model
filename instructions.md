@@ -2,8 +2,32 @@
 
 ## Offset Crank–Slider Data Generation, Simulation, and ML System  
 
-**Audience:** Coding AI agents, automation systems, advanced developers  
-**Goal:** Enable full implementation with zero ambiguity  
+**Audience:** Coding AI agents, automation systems, advanced developers
+**Goal:** Enable full implementation with zero ambiguity
+
+---
+
+## 0. Agent rules (mandatory — read before anything else)
+
+**You must invoke at least one subagent from `CLAUDE.md` for any substantive task.**
+
+`CLAUDE.md` (project root) defines four subagents:
+- **Physics Validator** — for any physics file edit or equation question
+- **Cross-Reference Auditor** — for any signature change or cross-file consistency check
+- **Data Quality Checker** — after any data generation run
+- **ML Readiness Inspector** — before any training run
+
+Read `CLAUDE.md` now if you have not already done so.
+
+### Known bugs (confirmed — do not ignore)
+
+These issues are documented and must be considered whenever touching the affected files:
+
+| # | File | Line | Issue | Impact |
+|---|---|---|---|---|
+| 1 | `src/mech390/datagen/generate.py` | ~144–150 | `omega` not set in design dict before `engine.evaluate_design()` — defaults to 1.0 rad/s instead of `RPM × 2π/60`. Mass properties also not merged before the physics call. | Forces scale as ω² — currently ~10× wrong when using `generate_dataset()` |
+| 2 | `src/mech390/physics/kinematics.py` | 290 | Sign error: `a_By = -alpha2 * r * cos(theta)` should be `+alpha2 * r * cos(theta)` | No current impact (`alpha_r` always 0.0), but formula is wrong |
+| 3 | `src/mech390/physics/mass_properties.py` | 208–209 | Hole offsets in `link_mass_moi_cg_z` use `±c/2`, exact only when `d_left == d_right` | Minor MOI error for asymmetric pin diameters |
 
 ---
 
@@ -305,6 +329,16 @@ mech390-crank-slider-ml/
 
 ---
 
+### `CLAUDE.md`
+
+**Purpose:** Defines available subagents and mandatory usage rules for Claude Code.
+Automatically read by Claude Code at the start of every session.
+Contains: project context, 4 subagent definitions with trigger conditions,
+mandatory subagent rule, known issues reference, and quick-reference table for teammates.
+Do not put physics logic here — use `instructions.md` for that.
+
+---
+
 ### `configs/`
 
 **Purpose:** Define experiments. No code logic here.
@@ -517,6 +551,16 @@ All steps are repeatable and configuration-driven.
 ---
 
 ## 13. Outstanding work (not yet implemented)
+
+### Known bugs (fix these first)
+
+| Bug | File | Fix |
+|---|---|---|
+| `omega` + mass props not injected before `engine.evaluate_design()` | `generate.py:144–150` | Compute mass props, merge into design dict, set `omega = RPM * 2π/60` before physics call |
+| Sign error on `alpha2` in `rod_angular_acceleration` | `kinematics.py:290` | Change `-alpha2 * r * cos(theta)` to `+alpha2 * r * cos(theta)` |
+| Hole offset approximation in `link_mass_moi_cg_z` | `mass_properties.py:208–209` | Use exact per-pin offsets from rectangle centroid instead of `±c/2` |
+
+### Unimplemented features
 
 | Item | Location | Notes |
 |---|---|---|
