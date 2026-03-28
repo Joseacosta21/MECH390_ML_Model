@@ -26,6 +26,27 @@ _CONSTRAINT_FUNCS = {
 }
 
 
+import math
+
+
+def _round_to_res(value: float, resolution_m: float) -> float:
+    """
+    Round *value* to the nearest multiple of *resolution_m*.
+    When resolution_m <= 0 no rounding is applied.
+
+    Uses Python's built-in round() to eliminate binary floating-point
+    representation noise (e.g. 0.103 * 1/0.001 arithmetic can yield
+    0.10300000000000001 without this step).
+    """
+    if resolution_m <= 0.0:
+        return value
+    # Determine how many decimal places resolution_m represents.
+    # e.g. 0.001 m -> 3 decimal places, 0.0001 m -> 4 decimal places.
+    decimal_places = max(0, round(-math.log10(resolution_m)))
+    raw = round(value / resolution_m) * resolution_m
+    return round(raw, decimal_places)
+
+
 def _range_bounds(range_def: Any, name: str) -> Tuple[float, float]:
     """Normalize config range definitions to (min, max)."""
     if isinstance(range_def, dict) and "min" in range_def and "max" in range_def:
@@ -72,8 +93,14 @@ def _generate_constrained_stage1_candidates(
     target_rom: float,
     max_draws: int,
     strict_eps: float,
+    resolution_m: float = 0.0,
 ) -> List[Dict[str, float]]:
-    """Generate (l, e) candidates that satisfy pre-feasibility constraints."""
+    """Generate (l, e) candidates that satisfy pre-feasibility constraints.
+
+    When *resolution_m* > 0 both *l* and *e* are rounded to the nearest
+    multiple of *resolution_m* immediately after sampling, so that all
+    downstream maths operates on manufacturable values.
+    """
     l_min_cfg, l_max_cfg = _range_bounds(l_range, "l")
     e_min_cfg, e_max_cfg = _range_bounds(e_range, "e")
 
@@ -96,11 +123,11 @@ def _generate_constrained_stage1_candidates(
         for _ in range(max_draws):
             if len(candidates) >= n_samples:
                 break
-            l = float(rng.uniform(l_low, l_high))
+            l = _round_to_res(float(rng.uniform(l_low, l_high)), resolution_m)
             e_interval = _feasible_e_interval_for_l(l, e_min_cfg, e_max_cfg, target_rom, strict_eps)
             if e_interval is None:
                 continue
-            e = float(rng.uniform(e_interval[0], e_interval[1]))
+            e = _round_to_res(float(rng.uniform(e_interval[0], e_interval[1])), resolution_m)
             candidates.append({"l": l, "e": e})
     elif method == "latin_hypercube":
         draws_used = 0
@@ -123,11 +150,16 @@ def _generate_constrained_stage1_candidates(
             for row in unit_samples:
                 if len(candidates) >= n_samples:
                     break
-                l = float(l_low + row["u_l"] * (l_high - l_low))
+                l = _round_to_res(
+                    float(l_low + row["u_l"] * (l_high - l_low)), resolution_m
+                )
                 e_interval = _feasible_e_interval_for_l(l, e_min_cfg, e_max_cfg, target_rom, strict_eps)
                 if e_interval is None:
                     continue
-                e = float(e_interval[0] + row["u_e"] * (e_interval[1] - e_interval[0]))
+                e = _round_to_res(
+                    float(e_interval[0] + row["u_e"] * (e_interval[1] - e_interval[0])),
+                    resolution_m,
+                )
                 candidates.append({"l": l, "e": e})
     else:
         raise ValueError(f"Unknown sampling method: {method}")
@@ -253,10 +285,23 @@ def _accept_candidate(
     qrr_max: float,
     rom_tolerance: float,
     compiled_constraints: List[Tuple[str, Any]],
+    resolution_m: float = 0.0,
 ) -> Optional[Dict[str, Any]]:
-    """Run full Stage-1 acceptance checks for one (l, e) candidate."""
+    """Run full Stage-1 acceptance checks for one (l, e) candidate.
+
+    When *resolution_m* > 0 the solved *r* is rounded to the nearest
+    multiple of *resolution_m* before ROM / QRR are evaluated, so that
+    maths is performed on the rounded (manufacturable) geometry.
+    """
     r_sol = solve_for_r_given_rom(l, e, target_rom, r_min, r_max, rom_tolerance=rom_tolerance)
     if r_sol is None:
+        return None
+
+    # --- Round r to manufacturing resolution ---
+    r_sol = _round_to_res(r_sol, resolution_m)
+
+    # Re-check bounds after rounding (rounding can push r outside [r_min, r_max]).
+    if not (r_min <= r_sol <= r_max):
         return None
 
     if not _constraints_satisfied(
@@ -293,6 +338,11 @@ def iter_valid_2d_mechanisms(
 ) -> Iterator[Dict[str, Any]]:
     """
     Generate valid Stage-1 2D mechanisms from config.
+
+    ``n_samples`` in the config is the **target number of valid designs**
+    to yield.  The function generates candidate (l, e) pairs in batches
+    until that many valid designs have been produced or the total draw
+    budget (max_attempts) is exhausted.
     """
     geo_ranges = config.get("geometry")
     op_settings = config.get("operating")
@@ -311,8 +361,8 @@ def iter_valid_2d_mechanisms(
     qrr_min, qrr_max = _range_bounds(op_settings["QRR"], "QRR")
     rom_tolerance = op_settings.get("ROM_tolerance", 1e-5)
 
-    target_n_samples = int(samp_config.get("n_samples", 1000))
-    if target_n_samples <= 0:
+    target_n_valid = int(samp_config.get("n_samples", 1000))
+    if target_n_valid <= 0:
         return
 
     sampling_method = samp_config.get("method", "random")
@@ -320,33 +370,67 @@ def iter_valid_2d_mechanisms(
     constraint_exprs = samp_config.get("constraints", []) or []
     compiled_constraints = _compile_constraints(constraint_exprs)
 
-    strict_eps = max(1e-12, rom_tolerance * 1e-3)
-    max_draws = max(n_attempts, target_n_samples * 10)
-    candidates = _generate_constrained_stage1_candidates(
-        method=sampling_method,
-        n_samples=target_n_samples,
-        seed=sampling_seed,
-        l_range=l_range,
-        e_range=e_range,
-        target_rom=target_rom,
-        max_draws=max_draws,
-        strict_eps=strict_eps,
-    )
+    # Manufacturing resolution (0 = no rounding)
+    mfg = config.get("manufacturing") or {}
+    resolution_m = float(mfg.get("resolution_mm", 0.0)) * 1e-3
 
-    for cand in candidates:
-        accepted = _accept_candidate(
-            l=cand["l"],
-            e=cand["e"],
-            r_min=r_min,
-            r_max=r_max,
+    strict_eps = max(1e-12, rom_tolerance * 1e-3)
+
+    # Generate candidates in batches.  Each batch is large enough to
+    # statistically produce the remaining valid designs, with a minimum
+    # floor so we don't spin with tiny batches.
+    total_draws = 0
+    n_valid_yielded = 0
+    batch_seed_offset = 0
+
+    while n_valid_yielded < target_n_valid:
+        remaining = target_n_valid - n_valid_yielded
+        # Heuristic batch size: 10× what we still need, at least 64.
+        batch_size = max(64, remaining * 10)
+
+        if total_draws + batch_size > n_attempts:
+            batch_size = n_attempts - total_draws
+
+        if batch_size <= 0:
+            logger.warning(
+                "Stage 1: draw budget exhausted after %d draws — "
+                "%d / %d valid designs produced.",
+                total_draws, n_valid_yielded, target_n_valid,
+            )
+            break
+
+        candidates = _generate_constrained_stage1_candidates(
+            method=sampling_method,
+            n_samples=batch_size,
+            seed=sampling_seed + batch_seed_offset,
+            l_range=l_range,
+            e_range=e_range,
             target_rom=target_rom,
-            qrr_min=qrr_min,
-            qrr_max=qrr_max,
-            rom_tolerance=rom_tolerance,
-            compiled_constraints=compiled_constraints,
+            max_draws=batch_size * 5,
+            strict_eps=strict_eps,
+            resolution_m=resolution_m,
         )
-        if accepted is not None:
-            yield accepted
+        total_draws += batch_size
+        batch_seed_offset += batch_size
+
+        for cand in candidates:
+            if n_valid_yielded >= target_n_valid:
+                break
+            accepted = _accept_candidate(
+                l=cand["l"],
+                e=cand["e"],
+                r_min=r_min,
+                r_max=r_max,
+                target_rom=target_rom,
+                qrr_min=qrr_min,
+                qrr_max=qrr_max,
+                rom_tolerance=rom_tolerance,
+                compiled_constraints=compiled_constraints,
+                resolution_m=resolution_m,
+            )
+            if accepted is not None:
+                n_valid_yielded += 1
+                yield accepted
 
 
 def generate_valid_2d_mechanisms(

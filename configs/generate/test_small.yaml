@@ -30,6 +30,7 @@ operating:
   P: 0.5
   mu: 0.2
   ROM: 0.25
+  ROM_tolerance: 0.0005           # ±0.5 mm
   QRR: {min: 1.5, max: 2.5}
   TotalCycles: 18720000
 
@@ -41,6 +42,10 @@ sampling:
     - "r > 0"
     - "l > 0"
     - "e >= 0"
+
+manufacturing:
+  resolution_mm: 1.0              # r, l, e, widths, thicknesses rounded to nearest mm
+  pin_resolution_mm: 0.1          # pin diameters rounded to nearest 0.1 mm
 
 sweep:
   theta_step_deg: 15
