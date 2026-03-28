@@ -58,7 +58,7 @@ No forces, masses, or stresses are evaluated at this stage.
    After solving `r`, Stage 1 also enforces branch feasibility introduced by squared algebra:
    - `l² + r² − e² − S²/2 >= 0`
    - residual check against the original ROM expression:
-     `|ROM_computed − ROM_target| <= ROM_tolerance`
+     `|ROM_computed − ROM_target| <= ROM_tolerance` (currently ±0.5 mm = 0.0005 m)
 
 3. Optional user-defined constraint expressions are evaluated against `(r, l, e, S)` to allow additional custom filtering.
 4. Dead-center positions are found via robust numerical root-finding (Brent's method) on the velocity equation.
@@ -68,7 +68,9 @@ No forces, masses, or stresses are evaluated at this stage.
    - the ROM target is met within tolerance, and
    - the quick return ratio lies within the acceptable range.
 
-This stage produces a set of kinematically valid two-dimensional mechanisms, emitted as a streaming iterator or collected into a list.
+This stage produces a set of kinematically valid two-dimensional mechanisms, emitted as a
+streaming iterator or collected into a list. The generator keeps drawing candidate batches
+until exactly `n_samples` valid designs are produced (not just attempted).
 
 ---
 
@@ -134,7 +136,9 @@ mech390-crank-slider-ml/
 ├─ scripts/           # Executable entry points
 │  ├─ generate_dataset.py
 │  ├─ preview_stage1.py     # Stage 1 CSV preview with CLI
+│  ├─ preview_stage2.py     # Stage 2 CSV preview with CLI (includes mass properties)
 │  ├─ debug_stage1.py       # Quick Stage 1 debug runner
+│  ├─ test_datagen.py       # Quick inline-config generation test
 │  ├─ train_model.py
 │  └─ optimize_config.py
 ├─ data/              # Generated datasets and trained models
@@ -157,8 +161,9 @@ They define:
 
 - `material`: fixed density `rho`, yield stresses (currently informational)
 - `geometry`: sampling ranges for `r`, `l`, `e`; grouped `widths`, `thicknesses`, `pin_diameters`; fixed `slider` dimensions
-- `operating`: `RPM`, `ROM`, `QRR` bounds, `mu` (friction), `TotalCycles`
-- `sampling`: `method` (`latin_hypercube` or `random`), `n_samples`, `n_variants_per_2d`, optional `stage2_max_attempts_per_2d`, optional `constraints` list
+- `operating`: `RPM`, `ROM`, `ROM_tolerance` (±0.5 mm = 0.0005 m), `QRR` bounds, `mu` (friction), `TotalCycles`
+- `sampling`: `method` (`latin_hypercube` or `random`), `n_samples` (**target number of VALID Stage-1 designs** to produce — the generator batches draws until this many pass), `n_variants_per_2d`, optional `stage2_max_attempts_per_2d`, optional `constraints` list
+- `manufacturing`: `resolution_mm` (rounding resolution for r/l/e/widths/thicknesses; default 1.0 mm), `pin_resolution_mm` (rounding resolution for pin diameters; default 0.1 mm)
 - `sweep`: `theta_step_deg` (fixed at 15°)
 - `limits`: `sigma_allow`, `tau_allow`, `safety_factor`
 - `output`: CSV path definitions
@@ -247,6 +252,7 @@ All training data is generated using physics-based equations.
 | `sampling.py` | ✅ Complete — `sample_scalar`, `LatinHypercubeSampler` (LHS via `scipy.stats.qmc`), `get_sampler` factory |
 | `generate.py` | ✅ Complete — `generate_dataset` orchestrator, physics evaluation with fallback mock, pass/fail labeling, `DatasetResult` container |
 | `preview_stage1.py` | ✅ Complete — CLI script for Stage 1 preview; writes CSV, prints stats; supports `--config`, `--seed`, `--out-dir` |
+| `preview_stage2.py` | ✅ Complete — CLI script for Stage 2 preview; runs Stage 1 → Stage 2, computes mass properties, writes 27-column CSV; supports `--config`, `--seed`, `--out-dir`, `--max-2d` |
 | `debug_stage1.py` | ✅ Complete — quick debug runner using baseline config |
 | `generate_dataset.py` | 🔲 Stub — imports only |
 | `train_model.py` | 🔲 Stub — imports only |
@@ -293,8 +299,10 @@ Each file below is listed **once** with its responsibility stated **inline**.
 | `src/mech390/ml/infer.py` | Prediction utilities (**stub**) |
 | `scripts/generate_dataset.py` | CLI entry point for dataset generation (**stub**) |
 | `scripts/preview_stage1.py` | CLI script: runs Stage 1, streams results to CSV; supports `--config`, `--seed`, `--out-dir`; prints descriptive statistics |
+| `scripts/preview_stage2.py` | CLI script: runs Stage 1 → Stage 2, computes mass properties inline, streams 27-column results to CSV; supports `--config`, `--seed`, `--out-dir`, `--max-2d`; prints descriptive statistics |
 | `scripts/debug_stage1.py` | Quick debug runner for Stage 1 using baseline config; prints first 5 designs and statistics |
 | `scripts/train_model.py` | CLI entry point for ML training (**stub**) |
 | `scripts/optimize_config.py` | CLI entry point for ML-based design evaluation (**stub**) |
 | `tests/test_datagen_units.py` | Unit tests for data generation pipeline |
 | `data/stage1_preview/stage1_geometries.csv` | Output CSV from `preview_stage1.py` (columns: r, l, e, ROM, QRR, theta_min, theta_max) |
+| `data/stage2_preview/stage2_designs.csv` | Output CSV from `preview_stage2.py` (27 columns: Stage-1 + 3D geometry + mass properties) |
