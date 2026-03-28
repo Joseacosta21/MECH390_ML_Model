@@ -167,24 +167,8 @@ class balance, feature distributions, potential leakage, and dataset size.
 
 ## Known Issues (Physics)
 
-These are confirmed bugs in the codebase. Subagents should be aware of them
-and flag if they are touched or if a fix is attempted.
-
-1. **`generate.py` — `omega` not injected before physics evaluation**
-   `engine.evaluate_design(design)` is called without setting `omega` in the design
-   dict. The engine defaults to `omega=1.0 rad/s` instead of `RPM × 2π/60`.
-   Mass properties are also not merged into the design dict before the call.
-   **Fix needed in:** `src/mech390/datagen/generate.py`
-
-2. **`kinematics.py:290` — Sign error on `alpha2` in `rod_angular_acceleration`**
-   `a_By = -alpha2 * r * cos(theta)` should be `+alpha2 * r * cos(theta)`.
-   No current impact because `alpha_r` always defaults to `0.0`.
-   **Fix needed in:** `src/mech390/physics/kinematics.py`
-
-3. **`mass_properties.py:208` — Hole offset approximation in `link_mass_moi_cg_z`**
-   Parallel-axis distances for pin holes use `±c/2`, which is only exact when
-   `d_left == d_right`. Minor MOI error for asymmetric pin diameters.
-   **Fix needed in:** `src/mech390/physics/mass_properties.py`
+All three previously confirmed bugs have been fixed in `bugfix/physics_corrections`.
+No open known issues remain. If new bugs are found, document them here.
 
 ---
 
