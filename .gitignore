@@ -1,1 +1,14 @@
-data/stage1_preview/stage1_geometries.csv
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+venv/
+.env
+
+# MacOS
+.DS_Store
+
+
