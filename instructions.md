@@ -510,7 +510,13 @@ All steps are repeatable and configuration-driven.
 
 ---
 
-## 12. Outstanding work (not yet implemented)
+## 12. Repository rules
+
+- **Empty Directories (`.gitkeep`):** Git does not track empty directories. Placeholder `.gitkeep` files are used locally to enforce folder structures (e.g. `data/models/`). **Rule:** When you add a new file to a directory that only has a `.gitkeep`, you MUST remove the `.gitkeep` file.
+
+---
+
+## 13. Outstanding work (not yet implemented)
 
 | Item | Location | Notes |
 |---|---|---|
@@ -528,7 +534,7 @@ All steps are repeatable and configuration-driven.
 
 ---
 
-## 13. Final contract statement
+## 14. Final contract statement
 
 This document defines:
 
