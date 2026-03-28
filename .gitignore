@@ -11,12 +11,4 @@ venv/
 # MacOS
 .DS_Store
 
-# Datasets - Ignore massive generated datasets and models
-data/raw/*.csv
-data/processed/*.csv
-data/splits/*.csv
-data/models/*.pt
-data/models/*.pkl
 
-# (Note: data/stage1_preview and data/stage2_preview are explicitly tracked
-# so you can see the small test outputs in your remote repo)
