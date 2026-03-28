@@ -30,17 +30,22 @@ operating:
   P: 0.5                          # process load placeholder (currently unused)
   mu: 0.2                         # coefficient of friction
   ROM: 0.25                       # range of motion (m)
+  ROM_tolerance: 0.0005           # ±0.5 mm
   QRR: {min: 1.5, max: 2.5}       # quick return ratio
   TotalCycles: 18720000           # 5 years of operation at 30 RPM
 
 sampling:
   method: latin_hypercube          # latin_hypercube | random | grid
-  n_samples: 20000000              # ignored for grid
+  n_samples: 40              # ignored for grid
   n_variants_per_2d: 5
   constraints:
     - "r > 0"
     - "l > 0"
     - "e >= 0"
+
+manufacturing:
+  resolution_mm: 1.0              # r, l, e, widths, thicknesses rounded to nearest mm
+  pin_resolution_mm: 0.1          # pin diameters rounded to nearest 0.1 mm
 
 sweep:
   theta_step_deg: 15               # fixed sweep step

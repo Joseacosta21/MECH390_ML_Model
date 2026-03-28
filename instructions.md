@@ -39,6 +39,7 @@ These constraints are assumed known and are enforced by design:
     ```
     |ROM_computed - ROM_target| <= ROM_tolerance
     ```
+    Current value: **ROM_tolerance = 0.0005 m (±0.5 mm)**
 - **Quick Return Ratio (QRR)**
   - Forward-to-return time ratio must satisfy:
 
@@ -104,7 +105,12 @@ Operations:
 5. Evaluate optional user-defined constraint expressions from config
 6. Find dead-center crank angles via Brent root-finding
 7. Compute ROM and QRR from kinematics
-8. Accept only if both ROM tolerance and QRR bounds are satisfied
+8. Accept only if both ROM tolerance (±0.5 mm) and QRR bounds are satisfied
+
+**`n_samples` = target number of VALID designs to yield.**  
+Candidates are generated in batches until exactly `n_samples` valid designs are produced
+or the draw budget (`n_attempts`) is exhausted. This guarantees the dataset size
+regardless of how many candidates are rejected.
 
 NO dynamics. NO stresses.
 
@@ -402,15 +408,18 @@ Configuration loading is responsible for numeric normalization (including scient
 #### `stage1_kinematic.py` ✅ Implemented
 
 - `solve_for_r_given_rom(l, e, target_rom, r_min, r_max, rom_tolerance)` → float or `None`
-- `iter_valid_2d_mechanisms(config, n_attempts)` → streaming iterator of valid `(r, l, e, ROM, QRR, theta_min, theta_max)` dicts
+- `iter_valid_2d_mechanisms(config, n_attempts)` → streaming iterator; keeps drawing in batches until `n_samples` VALID designs are yielded (or `n_attempts` budget is hit)
 - `generate_valid_2d_mechanisms(config, n_attempts)` → list wrapper for compatibility
-- Internal: pre-feasibility constrained (l,e) sampling, optional constraint expression evaluation
+- Internal: pre-feasibility constrained `(l,e)` sampling; rounding to `resolution_mm` for `l`, `e`, `r`; optional constraint expression evaluation
+- `_round_to_res(value, resolution_m)` — rounds to nearest multiple of `resolution_m`, then applies `round(raw, decimal_places)` to eliminate binary float noise
 
 #### `stage2_embodiment.py` ✅ Implemented (stubs for mass props + stresses)
 
 - `iter_expand_to_3d(valid_2d_designs, config)` → streaming iterator of 3D variants
 - `expand_to_3d(valid_2d_designs, config)` → list wrapper
 - Width/pin feasibility enforced: `width_r > pin_diameter_A/B`, `width_l > pin_diameter_B/C`
+- Rounding applied BEFORE constraint check: widths/thicknesses to `resolution_mm`, pin diameters to `pin_resolution_mm`
+- `_round_to_res(value, resolution_m)` — same noise-free implementation as Stage 1
 - Seed diversification: `design_seed = base_seed + design_idx * 9973`
 - Mass properties and stress calls marked as TODO stubs
 
@@ -430,6 +439,7 @@ Configuration loading is responsible for numeric normalization (including scient
 | Script | Status | Description |
 |---|---|---|
 | `preview_stage1.py` | ✅ Complete | CLI: runs Stage 1, streams to CSV. Args: `--config`, `--seed`, `--out-dir` |
+| `preview_stage2.py` | ✅ Complete | CLI: runs Stage 1 → Stage 2, computes mass properties, streams 27-column CSV. Args: `--config`, `--seed`, `--out-dir`, `--max-2d` |
 | `debug_stage1.py` | ✅ Complete | Quick debug runner using baseline config; prints first 5 designs + stats |
 | `generate_dataset.py` | 🔲 Stub | Imports only |
 | `train_model.py` | 🔲 Stub | Imports only |
@@ -511,6 +521,7 @@ All steps are repeatable and configuration-driven.
 | ML training loop | `ml/train.py` | Stub |
 | ML inference | `ml/infer.py` | Stub |
 | `generate_dataset.py` CLI | `scripts/generate_dataset.py` | Stub — needs argparse + `generate_dataset()` call |
+| `preview_stage2.py` mass+stress | `scripts/preview_stage2.py` | Currently computes mass props; stress calls pending `stresses.py` |
 | `train_model.py` CLI | `scripts/train_model.py` | Stub |
 | `optimize_config.py` CLI | `scripts/optimize_config.py` | Stub |
 | Fatigue analysis | `fatigue.py` | Empty — future work |

@@ -9,6 +9,8 @@ from typing import Any, Dict, Iterable, Iterator, List
 
 import numpy as np
 
+import math
+
 from mech390 import config as config_utils
 from mech390.datagen import sampling
 
@@ -17,6 +19,26 @@ _CONSTRAINT_TEXT = (
     "width_r > pin_diameter_A, width_r > pin_diameter_B, "
     "width_l > pin_diameter_B, width_l > pin_diameter_C"
 )
+
+# Parameters that use standard geometry resolution (resolution_mm)
+_GEO_PARAMS = {"width_r", "width_l", "thickness_r", "thickness_l"}
+# Parameters that use pin resolution (pin_resolution_mm)
+_PIN_PARAMS = {"pin_diameter_A", "pin_diameter_B", "pin_diameter_C"}
+
+
+def _round_to_res(value: float, resolution_m: float) -> float:
+    """
+    Round *value* to the nearest multiple of *resolution_m*.
+    When resolution_m <= 0 no rounding is applied.
+
+    Uses Python's built-in round() to eliminate binary floating-point
+    representation noise.
+    """
+    if resolution_m <= 0.0:
+        return value
+    decimal_places = max(0, round(-math.log10(resolution_m)))
+    raw = round(value / resolution_m) * resolution_m
+    return round(raw, decimal_places)
 
 
 def _passes_width_pin_constraints(candidate: Dict[str, float]) -> bool:
@@ -87,6 +109,11 @@ def iter_expand_to_3d(
 
     base_seed = int(config.get("random_seed", 42))
 
+    # Manufacturing resolutions (0 = no rounding)
+    mfg = config.get("manufacturing") or {}
+    res_m     = float(mfg.get("resolution_mm",     0.0)) * 1e-3
+    pin_res_m = float(mfg.get("pin_resolution_mm", 0.0)) * 1e-3
+
     for design_idx, design_2d in enumerate(valid_2d_designs):
         accepted = 0
         design_seed = base_seed + design_idx * 9973
@@ -97,11 +124,21 @@ def iter_expand_to_3d(
             max_attempts=max_attempts,
             seed=design_seed,
         ):
-            if not _passes_width_pin_constraints(candidate):
+            # --- Round to manufacturing resolution BEFORE constraint check ---
+            rounded: Dict[str, float] = {}
+            for name, value in candidate.items():
+                if name in _PIN_PARAMS:
+                    rounded[name] = _round_to_res(value, pin_res_m)
+                elif name in _GEO_PARAMS:
+                    rounded[name] = _round_to_res(value, res_m)
+                else:
+                    rounded[name] = value
+
+            if not _passes_width_pin_constraints(rounded):
                 continue
 
             design_3d: Dict[str, Any] = dict(design_2d)
-            design_3d.update(candidate)
+            design_3d.update(rounded)
 
             # TODO: compute masses and inertias with mech390.physics.mass_properties.
             # TODO: compute stresses with mech390.physics.stresses.
