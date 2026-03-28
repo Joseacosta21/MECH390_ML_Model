@@ -78,7 +78,7 @@ Any design that violates these constraints is invalid and must never reach stres
 - mass of each body
 - center of gravity of each body — returned as `np.ndarray([x, y])`
 - mass moment of inertia of each body
-- area moment of inertia of link/slider sections (bending properties)
+- area moment of inertia of link/slider sections (bending properties) — `Iyy`, `Izz`
 - joint reaction forces — returned as `np.ndarray([Fx, Fy])`
 - crank drive torque `τ_A` (also denoted `T` in equations; code key `tau_A`)
 - normal and shear stresses
@@ -95,12 +95,16 @@ Any design that violates these constraints is invalid and must never reach stres
 
 Operations:
 
-1. Sample two of `{r, l, D}` (current implementation samples `l` and `D`)
-2. Solve for the third variable (`r`) using the closed-form ROM relation
-3. Apply closed-form feasibility checks (real radicals, branch feasibility, full-rotation geometry)
-4. Find dead-center crank angles via root-finding
-5. Compute ROM and QRR from kinematics
-6. Accept only if both ROM tolerance and QRR bounds are satisfied
+1. Pre-filter feasible `(l, e)` domain before sampling (avoid wasted draws):
+   - enforce `l > ROM/2 + eps`
+   - enforce `e < sqrt(l² − ROM²/4) − eps` (numerator positivity)
+2. Sample `(l, e)` pairs inside the constrained domain using `random` or `latin_hypercube`
+3. Solve for `r` using the closed-form ROM relation
+4. Apply branch-feasibility checks to reject extraneous analytical roots
+5. Evaluate optional user-defined constraint expressions from config
+6. Find dead-center crank angles via Brent root-finding
+7. Compute ROM and QRR from kinematics
+8. Accept only if both ROM tolerance and QRR bounds are satisfied
 
 NO dynamics. NO stresses.
 
@@ -114,22 +118,22 @@ NO dynamics. NO stresses.
 
 Operations:
 
-1. Generate multiple 3D geometry variants for each valid 2D mechanism
-2. Sample widths, thicknesses, and pin diameters from config-defined ranges
+1. Generate multiple 3D geometry variants for each valid 2D mechanism (controlled by `sampling.n_variants_per_2d`)
+2. Sample widths, thicknesses, and pin diameters using the method in `sampling.method`
 3. Enforce Stage-2 geometric constraints:
    - `width_r > pin_diameter_A`
    - `width_r > pin_diameter_B`
    - `width_l > pin_diameter_B`
    - `width_l > pin_diameter_C`
-4. Compute mass and inertia properties
-5. Evaluate dynamics every 15° using a Newton–Euler linear solve that returns:
-   - `F_A`, `F_B`, `F_C` (joint reactions)
+4. Compute mass and inertia properties via `mass_properties.compute_design_mass_properties`
+5. Evaluate dynamics every 15° using a Newton–Euler 8×8 linear solve that returns:
+   - `F_A`, `F_B`, `F_C` (joint reactions as `np.ndarray([Fx, Fy])`)
    - `N`, `F_f` (slider normal + kinetic Coulomb friction)
    - `tau_A` (required crank torque)
    - compatibility alias `F_O = F_A`
-6. Compute stresses
-7. Track maximum stress values
-8. Apply pass/fail criteria
+6. Compute stresses *(not yet implemented in `stresses.py`; engine uses 0.0 placeholder)*
+7. Track maximum stress values over the full crank cycle
+8. Apply pass/fail criteria using `sigma_allow`, `tau_allow`, and `safety_factor`
 
 ---
 
@@ -151,18 +155,24 @@ All position, velocity, and acceleration quantities are `np.ndarray` of shape `(
 
     pos_B = np.array([r·cos θ, r·sin θ])
 
+### Connecting rod angle (open branch)
+
+    sin(φ) = −(e + r·sin θ) / l
+    cos(φ) = +√(1 − sin²(φ))     (positive, open configuration)
+    φ = arctan2(sin_φ, cos_φ)
+
+### Connecting rod angular velocity and acceleration
+
+    ω_cb = −V_By / (l·cos φ)
+    α_cb = (ω_cb² · l · sin φ − a_By) / (l · cos φ)
+
 ### Dead centers
 
-    dx_C / dθ = 0    (solved numerically via root-finding)
+    dx_C / dθ = 0    (solved numerically via Brent root-finding)
 
 ### ROM
 
     ROM = x_C(θ_max) − x_C(θ_min)
-
-At the dead centres the triangle OBC is collinear, giving the exact positions:
-
-    x_max = √((r + l)² − D²)    (extended)
-    x_min = √((l − r)² − D²)    (retracted)
 
 ### Closed-form solution for r given l, D, and ROM
 
@@ -196,31 +206,96 @@ All dead-center detection must be done via robust root-finding.
 
 ---
 
-## 6. Dataset definition (authoritative schema)
+## 6. Newton–Euler dynamics (8×8 linear system)
+
+The unknown vector at each crank angle θ is:
+
+    x = [F_Ax, F_Ay, F_Bx, F_By, F_Cx, F_Cy, N, tau_A]
+
+Eight equations are assembled from:
+1. Crank Fx balance
+2. Crank Fy balance (+ gravity term)
+3. Crank moment about G_r (includes tau_A)
+4. Rod Fx balance
+5. Rod Fy balance (+ gravity term)
+6. Rod moment about G_l
+7. Slider Fx balance (includes kinetic Coulomb friction: `−mu·sign(v_sx)·N`)
+8. Slider Fy balance (+ N as slider guide reaction)
+
+Condition number of the system matrix is checked against a limit of `1e12`. Ill-conditioned solves raise `ValueError`.
+
+COG positions used by the force balance:
+- Crank CG: midpoint of O–B → `crank_cog = 0.5 * pos_B`
+- Rod CG: midpoint of B–C → `rod_cog = 0.5 * (pos_B + pos_C)`
+- Slider CG: coincides with slider pin C → `slider_cog = pos_C`
+
+Body accelerations used:
+- `a_Gr = 0.5 * a_B`
+- `a_Gl = 0.5 * (a_B + a_C)`
+- `a_Gs = a_C`
+
+---
+
+## 7. Mass properties model
+
+### Link bodies (crank and rod)
+
+- Body length: `L = center_distance + 0.5*d_left + 0.5*d_right` (minimal tangency)
+- Net plan area: `L*w − π/4*(d_left² + d_right²)`
+- Net volume: `plan_area_net * t`
+- Net mass: `volume * rho`
+- Net mass MOI about CG z-axis: rectangular prism minus two circular holes (parallel-axis theorem)
+- Gross area moments: `Iyy = w*t³/12`, `Izz = t*w³/12`
+
+### Slider body
+
+- Net plan area: `l*w − π/4*d_C²`
+- Net volume: `plan_area_net * h`
+- Net mass: `volume * rho`
+- Net mass MOI: rectangular box minus centered hole
+- Gross area moments: `Iyy = w*h³/12`, `Izz = h*w³/12`
+
+### Aggregator
+
+`compute_design_mass_properties(design, config)` returns a flat dict with keys:
+`rho`, `mass_crank`, `mass_rod`, `mass_slider`, `I_mass_crank_cg_z`, `I_mass_rod_cg_z`,
+`I_mass_slider_cg_z`, `I_area_crank_yy`, `I_area_crank_zz`, `I_area_rod_yy`, `I_area_rod_zz`,
+`I_area_slider_yy`, `I_area_slider_zz`  
+(+ legacy aliases `I_area_slider_x`, `I_area_slider_y`).
+
+Slider fixed dimensions (`length`, `width`, `height`) are read from `config.geometry.slider`.
+Density is read from `config.material.rho` (must be fixed scalar or `{min: x, max: x}` with equal bounds).
+
+---
+
+## 8. Dataset definition (authoritative schema)
 
 Each dataset row MUST include:
 
 ### Inputs
 
-- `r, l, D`
-- all 3D geometry parameters
-- mass properties
-- mass moments of inertia
-- area moments of inertia used in stress calculations
+- `r, l, e`
+- all 3D geometry parameters (`width_r`, `width_l`, `thickness_r`, `thickness_l`, `pin_diameter_A/B/C`)
+- mass properties (`mass_crank`, `mass_rod`, `mass_slider`)
+- mass moments of inertia (`I_mass_crank_cg_z`, `I_mass_rod_cg_z`, `I_mass_slider_cg_z`)
+- area moments of inertia (`I_area_crank_yy`, `I_area_crank_zz`, `I_area_rod_yy`, `I_area_rod_zz`, `I_area_slider_yy`, `I_area_slider_zz`)
+- kinematic metrics (`ROM`, `QRR`, `theta_min`, `theta_max`)
 
 ### Outputs
 
 - `sigma_max` (maximum normal stress over cycle)
 - `tau_max` (maximum shear stress over cycle)
 - `utilization = max(sigma_max/σ_allow, tau_max/τ_allow)`
-- `pass_fail` (binary)
-- optional: crank angle at which maxima occur
+- `pass_fail` (binary: 1 = pass, 0 = fail)
+- optional: `theta_sigma_max`, `theta_tau_max` (crank angle at which maxima occur)
 
 ---
 
-## 7. Repository structure and file contracts
+## 9. Repository structure and file contracts
 
+```
 mech390-crank-slider-ml/
+```
 
 ---
 
@@ -228,135 +303,137 @@ mech390-crank-slider-ml/
 
 **Purpose:** Define experiments. No code logic here.
 
+```
 configs/
 ├─ generate/
-│  ├─ baseline.yaml
-│  └─ aggressive.yaml
+│  ├─ baseline.yaml     # Full-scale run: 20M samples, LHS, 5 variants/2D
+│  ├─ test_small.yaml   # Test run: 1000 samples, LHS, 5 variants/2D
+│  └─ aggressive.yaml   # Wide-range generation config
 ├─ train/
 │  ├─ regression.yaml
 │  └─ classifier.yaml
 └─ optimize/
-└─ search.yaml
+   └─ search.yaml
+```
 
 Each config file:
 
 - defines sampling ranges
 - defines constraints
-- can define Stage-2 embodiment controls (`n_variants_per_2d`, optional retry cap)
+- can define Stage-2 embodiment controls (`n_variants_per_2d`, optional `stage2_max_attempts_per_2d`)
 - defines output paths
 - contains NO physics logic
 
-Configuration loading is responsible for numeric normalization and range validation.
+Configuration loading is responsible for numeric normalization (including scientific notation) and range validation.
 
 ---
 
-### `src/`
+### `src/mech390/config.py`
 
-**Purpose:** All reusable, deterministic logic.
+**Implemented functions:**
 
-src/
-└─ mech390/
-├─ physics/
-│  ├─ kinematics.py
-│  ├─ dynamics.py
-│  ├─ stresses.py
-│  └─ engine.py
-
-- `kinematics.py`
-  - Implements all position, velocity, acceleration equations
-  - **All quantities returned as `np.ndarray([x, y])`**
-  - Slider C (x-axis constrained): `slider_position`, `slider_velocity`, `slider_acceleration`
-  - Crank pin B (full 2D circle): `crank_pin_position`, `crank_pin_velocity`, `crank_pin_acceleration`
-  - Dead-center detection via root-finding
-  - ROM and QRR evaluation
-  - NO randomness
-
-- `dynamics.py`
-  - Newton–Euler 8x8 linear system solve per crank angle
-  - Returns joint reactions `F_A`, `F_B`, `F_C` as `np.ndarray([Fx, Fy])`
-  - Also returns `N`, `F_f`, and `tau_A` with compatibility alias `F_O`
-  - Uses outputs from kinematics
-
-- `stresses.py`
-  - Stress formulas
-  - Section properties
-  - Returns σ(θ), τ(θ)
-
-- `engine.py`
-  - Orchestrates 15° sweep
-  - Tracks maxima
-  - Returns summary metrics
-
-- `mass_properties.py`
-  - Center-of-gravity positions — returned as `np.ndarray([x, y])`
-  - Modular mass/inertia helpers for link and slider bodies with pin holes
-  - Design-level aggregator `compute_design_mass_properties(...)`
-  - Link area moments reported with `Iyy` and `Izz`
+- `load_config(config_path)` → loads YAML, normalizes all numeric strings, validates `{min,max}` ranges
+- `get_baseline_config()` → loads `configs/generate/baseline.yaml` relative to package location
+- `normalize_range_def(range_def, name)` → canonicalizes `{min,max}`, `[min,max]`, or scalar to `{'min': float, 'max': float}`
+- `get_stage2_param_ranges(config)` → extracts all 7 Stage-2 parameter ranges with precedence: nested groups → legacy flat keys
+- `get_stage2_sampling_settings(config)` → extracts `n_variants_per_2d` and `stage2_max_attempts_per_2d` with defaults
 
 ---
 
-├─ datagen/
-│  ├─ sampling.py
-│  ├─ stage1_kinematic.py
-│  ├─ stage2_embodiment.py
-│  └─ generate.py
+### `src/mech390/physics/`
 
-- `sampling.py`
-  - Random / Latin hypercube sampling
-  - Seed control
-  - NO physics
+**Purpose:** All reusable, deterministic physics logic.
 
-- `stage1_kinematic.py`
-  - Implements Stage 1 algorithm
-  - Solves for unknown geometry using closed-form `r(l,D,S)`
-  - Applies branch-feasibility checks to reject extraneous analytical roots
-  - Applies ROM and QRR constraints
+#### `kinematics.py` ✅ Implemented
 
-- `stage2_embodiment.py`
-  - Expands each valid 2D mechanism into multiple 3D variants
-  - Supports streaming iterator-style generation for large runs
-  - Enforces width/pin feasibility constraints during sampling
+- `slider_position(theta, r, l, e)` → `np.ndarray([x_C, 0.0])`
+- `slider_velocity(theta, omega, r, l, e)` → `np.ndarray([v_Cx, 0.0])`
+- `slider_acceleration(theta, omega, r, l, e)` → `np.ndarray([a_Cx, 0.0])`
+- `crank_pin_position(theta, r)` → `np.ndarray([r·cosθ, r·sinθ])`
+- `crank_pin_velocity(theta, omega, r)` → `np.ndarray([-r·ω·sinθ, r·ω·cosθ])`
+- `crank_pin_acceleration(theta, omega, r)` → `np.ndarray([-r·ω²·cosθ, -r·ω²·sinθ])`
+- `rod_angle(theta, r, l, e)` → φ (open branch, positive cos)
+- `rod_angular_velocity(theta, omega, r, l, e)` → ω_cb
+- `rod_angular_acceleration(theta, omega, r, l, e, alpha2=0.0)` → α_cb
+- `get_dead_center_angles(r, l, e)` → sorted `np.ndarray` of 2 roots, or empty array
+- `calculate_metrics(r, l, e)` → dict with `ROM`, `QRR`, `theta_retracted`, `theta_extended`, `x_min`, `x_max`; or `{'valid': False, 'reason': str}`
+- NO randomness
 
-- `generate.py`
-  - High-level data generation pipeline
-  - Consumes Stage-2 designs incrementally (streaming-capable)
-  - Writes CSV outputs
+#### `dynamics.py` ✅ Implemented
+
+- `solve_joint_reactions_newton_euler(theta, omega, r, l, e, mass_crank, mass_rod, mass_slider, I_crank, I_rod, mu, g, alpha_r, v_eps)` → dict of `F_A`, `F_B`, `F_C`, `F_O`, `N`, `F_f`, `tau_A`
+- `joint_reaction_forces(theta, omega, r, l, e, mass_crank, mass_rod, mass_slider, **kwargs)` → backward-compatible wrapper
+- Ill-conditioning guard: `cond(A) > 1e12` raises `ValueError`
+- Uses kinematics and mass_properties COG helpers internally
+
+#### `mass_properties.py` ✅ Implemented
+
+- Kinematic COG helpers: `crank_cog`, `rod_cog`, `slider_cog` → `np.ndarray([x, y])`
+- Link geometry: `link_body_length`, `link_plan_area_net`, `link_volume_net`, `link_mass`, `link_mass_moi_cg_z`, `link_area_moments_gross`
+- Slider geometry: `slider_volume_net`, `slider_mass`, `slider_mass_moi_cg_z`, `slider_area_moments_gross`
+- `MassPropertiesResult` frozen dataclass with `.to_dict()` (includes legacy aliases)
+- `compute_design_mass_properties(design, config)` → flat dict aggregator
+
+#### `stresses.py` 🔲 Stub
+
+- Currently only imports `dynamics`
+- Stress formulas not yet implemented
+
+#### `fatigue.py` 🔲 Empty
+
+- Reserved for future fatigue analysis
+
+#### `engine.py` ✅ Implemented (stresses placeholder)
+
+- `evaluate_design(design)` → 15° sweep, calls kinematics → dynamics → stresses (0.0 placeholder)
+- Returns `sigma_max`, `tau_max`, `theta_sigma_max`, `theta_tau_max`, `valid_physics`
 
 ---
 
-├─ ml/
-│  ├─ features.py
-│  ├─ models.py
-│  ├─ train.py
-│  └─ infer.py
+### `src/mech390/datagen/`
 
-- `features.py`
-  - Feature selection
-  - Scaling
-- `models.py`
-  - ML architectures
-- `train.py`
-  - Training loops
-- `infer.py`
-  - Prediction utilities
+#### `sampling.py` ✅ Implemented
+
+- `sample_scalar(range_def, seed)` — uniform, discrete choice, or constant
+- `LatinHypercubeSampler(param_ranges, n_samples, seed).generate()` — uses `scipy.stats.qmc.LatinHypercube`
+- `get_sampler(method, param_ranges, n_samples, seed)` — factory for `latin_hypercube` and `random`
+- NO physics imports
+
+#### `stage1_kinematic.py` ✅ Implemented
+
+- `solve_for_r_given_rom(l, e, target_rom, r_min, r_max, rom_tolerance)` → float or `None`
+- `iter_valid_2d_mechanisms(config, n_attempts)` → streaming iterator of valid `(r, l, e, ROM, QRR, theta_min, theta_max)` dicts
+- `generate_valid_2d_mechanisms(config, n_attempts)` → list wrapper for compatibility
+- Internal: pre-feasibility constrained (l,e) sampling, optional constraint expression evaluation
+
+#### `stage2_embodiment.py` ✅ Implemented (stubs for mass props + stresses)
+
+- `iter_expand_to_3d(valid_2d_designs, config)` → streaming iterator of 3D variants
+- `expand_to_3d(valid_2d_designs, config)` → list wrapper
+- Width/pin feasibility enforced: `width_r > pin_diameter_A/B`, `width_l > pin_diameter_B/C`
+- Seed diversification: `design_seed = base_seed + design_idx * 9973`
+- Mass properties and stress calls marked as TODO stubs
+
+#### `generate.py` ✅ Implemented
+
+- `generate_dataset(config, seed)` → `DatasetResult(all_cases, pass_cases, summary)`
+- Streaming Stage-2 consumption via `iter_expand_to_3d`
+- Physics evaluation with fallback mock when engine unavailable
+- `_apply_limits` computes `utilization` and `pass_fail` from `sigma_allow`, `tau_allow`, `safety_factor`
 
 ---
 
 ### `scripts/`
 
-**Purpose:** Entry points only (thin wrappers).
+**Purpose:** Entry points only. Each script loads config and calls library code.
 
-scripts/
-├─ generate_dataset.py
-├─ train_model.py
-└─ optimize_config.py
-
-Each script:
-
-- loads a config file
-- calls library code
-- creates a run directory
-- logs metadata
+| Script | Status | Description |
+|---|---|---|
+| `preview_stage1.py` | ✅ Complete | CLI: runs Stage 1, streams to CSV. Args: `--config`, `--seed`, `--out-dir` |
+| `debug_stage1.py` | ✅ Complete | Quick debug runner using baseline config; prints first 5 designs + stats |
+| `generate_dataset.py` | 🔲 Stub | Imports only |
+| `train_model.py` | 🔲 Stub | Imports only |
+| `optimize_config.py` | 🔲 Stub | Imports only |
 
 ---
 
@@ -364,14 +441,26 @@ Each script:
 
 **Purpose:** Generated artifacts only.
 
+```
 data/
+├─ stage1_preview/
+│  └─ stage1_geometries.csv   # Output of preview_stage1.py
 ├─ raw/
 │  └─ <run_id>/
 ├─ processed/
 ├─ models/
 └─ splits/
+```
 
 Never hard-code paths to this directory.
+
+---
+
+### `tests/`
+
+| File | Description |
+|---|---|
+| `tests/test_datagen_units.py` | Unit tests for data generation pipeline |
 
 ---
 
@@ -379,35 +468,56 @@ Never hard-code paths to this directory.
 
 **Purpose:** Diagnostics and summaries.
 
+```
 reports/
 ├─ data_generation/
 ├─ training/
 └─ optimization/
+```
 
 ---
 
-## 8. Expected usage pattern
+## 10. Expected usage pattern
 
-1. Define a generation config
-2. Run dataset generation
-3. Inspect summary reports
-4. Train ML model
-5. Use ML for rapid evaluation or optimization
+1. Define or choose a generation config in `configs/generate/`
+2. Run Stage 1 preview: `python scripts/preview_stage1.py --config configs/generate/baseline.yaml`
+3. Run full dataset generation: `python scripts/generate_dataset.py` *(stub — implement CLI)*
+4. Inspect summary reports
+5. Train ML model: `python scripts/train_model.py` *(stub — implement CLI)*
+6. Use ML for rapid evaluation or optimization: `python scripts/optimize_config.py` *(stub)*
 
 All steps are repeatable and configuration-driven.
 
 ---
 
-## 9. Determinism and reproducibility rules
+## 11. Determinism and reproducibility rules
 
 - All physics functions must be deterministic
-- Randomness only allowed in sampling modules
-- All runs must be seed-controlled
+- Randomness only allowed in `sampling.py` and `stage1_kinematic.py` (constrained candidate generation)
+- All runs must be seed-controlled via `config.random_seed`
+- Stage-2 seed diversification: `design_seed = base_seed + design_idx * 9973`
 - Outputs must be traceable to configs
 
 ---
 
-## 10. Final contract statement
+## 12. Outstanding work (not yet implemented)
+
+| Item | Location | Notes |
+|---|---|---|
+| Stress formulas (normal + shear) | `stresses.py` | Required for real pass/fail labels |
+| Mass+stress calls in Stage 2 | `stage2_embodiment.py` | Marked as TODO stubs |
+| ML feature engineering | `ml/features.py` | Stub |
+| ML model definitions | `ml/models.py` | Stub |
+| ML training loop | `ml/train.py` | Stub |
+| ML inference | `ml/infer.py` | Stub |
+| `generate_dataset.py` CLI | `scripts/generate_dataset.py` | Stub — needs argparse + `generate_dataset()` call |
+| `train_model.py` CLI | `scripts/train_model.py` | Stub |
+| `optimize_config.py` CLI | `scripts/optimize_config.py` | Stub |
+| Fatigue analysis | `fatigue.py` | Empty — future work |
+
+---
+
+## 13. Final contract statement
 
 This document defines:
 
@@ -416,6 +526,7 @@ This document defines:
 - all equations
 - all file responsibilities
 - all expected behaviors
+- the current implementation status of every module
 
 Any implementation that follows this document is considered correct.
 
