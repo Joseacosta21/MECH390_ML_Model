@@ -12,11 +12,13 @@ import pandas as pd
 
 from mech390.datagen import stage1_kinematic, stage2_embodiment
 
-# Try to import physics engine, or mock if not available
+# Try to import physics engine and mass_properties, or mock if not available
 try:
     from mech390.physics import engine
+    from mech390.physics import mass_properties as mp
 except ImportError:
     engine = None
+    mp = None
     logging.warning("mech390.physics.engine not found. Physics evaluation will be skipped/mocked.")
 
 # Logger setup
@@ -140,11 +142,25 @@ def generate_dataset(config: Dict[str, Any], seed: int = None) -> DatasetResult:
     sigma_limit = sigma_allow / safety_factor
     tau_limit = tau_allow / safety_factor
 
+    # Compute omega once — same for every design in this run.
+    rpm = float(config.get('operating', {}).get('RPM', 30))
+    omega = rpm * 2.0 * np.pi / 60.0
+
     n_stage2 = 0
     for design in _iter_stage2_designs(valid_2d, config):
         n_stage2 += 1
         design_eval = design.copy()
+        design_eval['omega'] = omega
         design_eval.setdefault("mu", mu_default)
+
+        # Merge mass properties so the physics engine has real masses/inertias.
+        if mp is not None:
+            try:
+                mass_props = mp.compute_design_mass_properties(design_eval, config)
+                design_eval.update(mass_props)
+            except Exception as exc:
+                logger.warning("Mass properties failed for design #%d: %s", n_stage2, exc)
+
         case = design_eval.copy()
         metrics = _evaluate_physics(design_eval, engine)
         case.update(metrics)
