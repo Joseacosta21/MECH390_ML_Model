@@ -42,7 +42,7 @@ No forces, masses, or stresses are evaluated at this stage.
 
 ### Process
 
-1. Rod length `l` and offset `e` are sampled from configured ranges.
+1. Rod length `l` and offset `e` are sampled from configured ranges, with pre-feasibility filtering applied before sampling to avoid wasted draws.
 2. The crank radius `r` is solved **analytically** (exact closed-form) from the target ROM:
 
    ```
@@ -60,14 +60,15 @@ No forces, masses, or stresses are evaluated at this stage.
    - residual check against the original ROM expression:
      `|ROM_computed − ROM_target| <= ROM_tolerance`
 
-3. Dead-center positions are found via robust numerical root-finding on the velocity equation.
-4. The forward and return crank-angle spans are evaluated.
-5. The quick return ratio is computed from these angle spans.
-6. The geometry is retained only if:
+3. Optional user-defined constraint expressions are evaluated against `(r, l, e, S)` to allow additional custom filtering.
+4. Dead-center positions are found via robust numerical root-finding (Brent's method) on the velocity equation.
+5. The forward and return crank-angle spans are evaluated.
+6. The quick return ratio is computed from these angle spans.
+7. The geometry is retained only if:
    - the ROM target is met within tolerance, and
    - the quick return ratio lies within the acceptable range.
 
-This stage produces a set of kinematically valid two-dimensional mechanisms.
+This stage produces a set of kinematically valid two-dimensional mechanisms, emitted as a streaming iterator or collected into a list.
 
 ---
 
@@ -80,7 +81,7 @@ In Stage 2, each valid 2D mechanism is expanded into a family of three-dimension
 ### Process
 
 1. For each valid `(r, l, e)` geometry, many 3D variants are generated (controlled by `sampling.n_variants_per_2d`).
-2. Widths, thicknesses, and pin diameters are sampled from configuration ranges.
+2. Widths, thicknesses, and pin diameters are sampled from configuration ranges using the method specified in `sampling.method`.
 3. Geometric feasibility constraints are enforced:
    - `width_r > pin_diameter_A`
    - `width_r > pin_diameter_B`
@@ -88,14 +89,14 @@ In Stage 2, each valid 2D mechanism is expanded into a family of three-dimension
    - `width_l > pin_diameter_C`
 4. Mass properties are evaluated through the modular `mass_properties` API:
    masses, center-of-gravity vectors, mass moments, and area moments.
-5. Dynamic forces are evaluated at every 15° of crank rotation using a planar Newton–Euler solve that returns:
+5. Dynamic forces are evaluated at every 15° of crank rotation using a planar Newton–Euler 8×8 linear solve that returns:
    - joint reactions at A, B, and C (`F_A`, `F_B`, `F_C`)
    - slider normal/friction (`N`, `F_f`, kinetic Coulomb)
    - required crank torque (`tau_A`)
    - compatibility alias `F_O = F_A`
-6. Normal and shear stresses are computed throughout the cycle.
+6. Normal and shear stresses are computed throughout the cycle. *(stresses.py stub — not yet fully implemented)*
 7. The maximum stress values over the full cycle are extracted.
-8. Each design is classified as pass or fail based on allowable stress limits.
+8. Each design is classified as pass or fail based on allowable stress limits (`sigma_allow`, `tau_allow`, `safety_factor`).
 
 This stage generates the dataset used for machine learning.
 
@@ -119,13 +120,29 @@ From a computational standpoint:
 
 ## 6. Repository structure
 
+```
 mech390-crank-slider-ml/
-├─ configs/        # Experiment definitions (YAML files)
-├─ src/            # Physics, data generation, and ML code
-├─ scripts/        # Executable entry points
-├─ data/           # Generated datasets and trained models
-├─ reports/        # Plots and run summaries
+├─ configs/           # Experiment definitions (YAML files)
+│  ├─ generate/       # Data generation configs (baseline.yaml, aggressive.yaml, test_small.yaml)
+│  ├─ train/          # ML training configs (regression.yaml, classifier.yaml)
+│  └─ optimize/       # Optimization configs (search.yaml)
+├─ src/mech390/       # Physics, data generation, and ML code
+│  ├─ config.py       # Config loading and validation utilities
+│  ├─ physics/        # Kinematics, dynamics, mass properties, engine, stresses
+│  ├─ datagen/        # Stage 1 & 2 pipeline, sampling, generate orchestrator
+│  └─ ml/             # Feature engineering, models, training, inference (stubs)
+├─ scripts/           # Executable entry points
+│  ├─ generate_dataset.py
+│  ├─ preview_stage1.py     # Stage 1 CSV preview with CLI
+│  ├─ debug_stage1.py       # Quick Stage 1 debug runner
+│  ├─ train_model.py
+│  └─ optimize_config.py
+├─ data/              # Generated datasets and trained models
+│  └─ stage1_preview/ # Output of preview_stage1.py
+├─ tests/             # Unit tests (test_datagen_units.py)
+├─ reports/           # Plots and run summaries
 └─ README.md
+```
 
 All experiments are defined through configuration files.  
 The core code does not need to be modified to run new studies.
@@ -138,15 +155,15 @@ Configuration files describe how data is generated and how models are trained.
 
 They define:
 
-- geometry sampling ranges,
-- kinematic constraints,
-- stage-2 variant controls (`n_variants_per_2d`, optional retry cap),
-- stress limits,
-- output locations.
+- `material`: fixed density `rho`, yield stresses (currently informational)
+- `geometry`: sampling ranges for `r`, `l`, `e`; grouped `widths`, `thicknesses`, `pin_diameters`; fixed `slider` dimensions
+- `operating`: `RPM`, `ROM`, `QRR` bounds, `mu` (friction), `TotalCycles`
+- `sampling`: `method` (`latin_hypercube` or `random`), `n_samples`, `n_variants_per_2d`, optional `stage2_max_attempts_per_2d`, optional `constraints` list
+- `sweep`: `theta_step_deg` (fixed at 15°)
+- `limits`: `sigma_allow`, `tau_allow`, `safety_factor`
+- `output`: CSV path definitions
 
-Configuration loading normalizes numeric values (including scientific notation) and validates `{min,max}` ranges before sampling.
-
-Rather than listing individual designs, configuration files specify how entire families of designs are generated.
+Configuration loading normalizes numeric values (including scientific notation) and validates `{min, max}` ranges before sampling.
 
 ---
 
@@ -180,7 +197,9 @@ Rather than listing individual designs, configuration files specify how entire f
 | `I_mass_crank_cg_z` | Crank mass moment of inertia about CG z-axis | kg·m² |
 | `I_mass_rod_cg_z` | Rod mass moment of inertia about CG z-axis | kg·m² |
 | `I_mass_slider_cg_z` | Slider mass moment of inertia about CG z-axis | kg·m² |
-| `Iyy`, `Izz` | Area moments of inertia of cross-section (bending) | m⁴ |
+| `I_area_crank_yy`, `I_area_crank_zz` | Area moments of inertia of crank cross-section | m⁴ |
+| `I_area_rod_yy`, `I_area_rod_zz` | Area moments of inertia of rod cross-section | m⁴ |
+| `I_area_slider_yy`, `I_area_slider_zz` | Area moments of inertia of slider cross-section | m⁴ |
 | `F_A`, `F_B`, `F_C` | Joint reaction force vectors at joints A, B, C | N |
 | `F_O` | Compatibility alias for `F_A` | N |
 | `N` | Slider normal reaction from guide | N |
@@ -212,9 +231,33 @@ All training data is generated using physics-based equations.
 
 ⸻
 
+## 10. Implementation status
+
+| Module | Status |
+|---|---|
+| `config.py` | ✅ Complete — loads YAML, normalizes numerics, validates ranges, extracts Stage-2 param ranges and sampling settings |
+| `kinematics.py` | ✅ Complete — slider & crank pin positions/velocities/accelerations (all `np.ndarray([x,y])`), rod angle/angular velocity/acceleration, dead centers via Brent root-finding, ROM & QRR |
+| `dynamics.py` | ✅ Complete — Newton–Euler 8×8 linear solve, returns `F_A/B/C`, `N`, `F_f`, `tau_A`, `F_O`; ill-conditioning guard |
+| `mass_properties.py` | ✅ Complete — link/slider mass, CG helpers, mass MOI, area MOI (Iyy/Izz), `MassPropertiesResult` dataclass, `compute_design_mass_properties` aggregator |
+| `engine.py` | ✅ Complete — 15° sweep, calls kinematics→dynamics; stresses plugged in as `0.0` placeholder pending `stresses.py` |
+| `stresses.py` | 🔲 Stub — only imports `dynamics`; stress formulas not yet implemented |
+| `fatigue.py` | 🔲 Empty — reserved for future fatigue analysis |
+| `stage1_kinematic.py` | ✅ Complete — pre-feasibility sampling, constrained (l,e) candidate generation, closed-form `r` solver, full acceptance pipeline, streaming iterator + list API |
+| `stage2_embodiment.py` | ✅ Complete — streaming 3D expansion, width/pin constraint enforcement; mass properties and stress calls are TODO stubs |
+| `sampling.py` | ✅ Complete — `sample_scalar`, `LatinHypercubeSampler` (LHS via `scipy.stats.qmc`), `get_sampler` factory |
+| `generate.py` | ✅ Complete — `generate_dataset` orchestrator, physics evaluation with fallback mock, pass/fail labeling, `DatasetResult` container |
+| `preview_stage1.py` | ✅ Complete — CLI script for Stage 1 preview; writes CSV, prints stats; supports `--config`, `--seed`, `--out-dir` |
+| `debug_stage1.py` | ✅ Complete — quick debug runner using baseline config |
+| `generate_dataset.py` | 🔲 Stub — imports only |
+| `train_model.py` | 🔲 Stub — imports only |
+| `optimize_config.py` | 🔲 Stub — imports only |
+| `ml/` | 🔲 Stubs — `features.py`, `models.py`, `train.py`, `infer.py` |
+
+⸻
+
 # Repository File Tree and Responsibilities (Authoritative)
 
-Each file below is listed **once** with its responsibility stated **inline**, so an AI agent or developer can immediately understand scope, ownership, and behavior.
+Each file below is listed **once** with its responsibility stated **inline**.
 
 ---
 
@@ -224,20 +267,34 @@ Each file below is listed **once** with its responsibility stated **inline**, so
 
 | Path | Description |
 |-----|-------------|
-| `README.md` | High-level project overview for mechanical engineering students |
-| `TECHNICAL_SPEC.md` | Authoritative technical specification for developers and AI agents |
+| `README.md` | High-level project overview, workflow, nomenclature, and implementation status |
+| `instructions.md` | Authoritative technical specification for developers and AI agents |
 | `configs/` | YAML experiment definitions (no executable logic) |
-| `configs/generate/` | Data generation configurations |
-| `configs/train/` | ML training configurations |
-| `configs/optimize/` | Optimization and inference configurations |
-| `src/mech390/config.py` | Configuration loading, numeric normalization, and range validation helpers |
-| `src/mech390/physics/kinematics.py` | Position, velocity, acceleration for slider (x-axis constrained) and crank pin (2D circular motion); all quantities returned as `np.ndarray([x, y])`; ROM and QRR metrics |
-| `src/mech390/physics/dynamics.py` | Newton–Euler 8x8 joint-reaction solver (`A/B/C`, `N`, `F_f`, `tau_A`) with compatibility key `F_O` |
-| `src/mech390/physics/mass_properties.py` | Center-of-gravity vectors, masses, mass moments, and area moments (`Iyy`, `Izz`) with a design-level aggregator |
-| `src/mech390/physics/stresses.py` | Normal and shear stress calculations |
-| `src/mech390/physics/engine.py` | 15° crank-angle sweep; orchestrates kinematics → dynamics → stresses; tracks peak sigma and tau |
-| `src/mech390/datagen/stage1_kinematic.py` | 2D kinematic synthesis using exact closed-form r formula; feasibility filtering |
-| `src/mech390/datagen/stage2_embodiment.py` | Multi-variant 3D embodiment generation with streaming iterator and width/pin feasibility constraints |
-| `scripts/generate_dataset.py` | CLI entry point for dataset generation |
-| `scripts/train_model.py` | CLI entry point for ML training |
-| `scripts/optimize_config.py` | CLI entry point for ML-based design evaluation |
+| `configs/generate/baseline.yaml` | Full-scale generation config (20M samples, LHS, 5 variants/2D) |
+| `configs/generate/test_small.yaml` | Small test config (1000 samples, LHS, 5 variants/2D) |
+| `configs/generate/aggressive.yaml` | Aggressive/wide-range generation config |
+| `configs/train/regression.yaml` | ML regression training config |
+| `configs/train/classifier.yaml` | ML classifier training config |
+| `configs/optimize/search.yaml` | ML-based design optimization config |
+| `src/mech390/config.py` | Config loading (`load_config`, `get_baseline_config`), numeric normalization, range validation, Stage-2 param range and sampling settings extraction |
+| `src/mech390/physics/kinematics.py` | Slider & crank pin position/velocity/acceleration (all `np.ndarray([x,y])`); rod angle/angular velocity/acceleration; dead-center detection via Brent root-finding; ROM and QRR metrics |
+| `src/mech390/physics/dynamics.py` | Newton–Euler 8×8 joint-reaction solver (`F_A/B/C`, `N`, `F_f`, `tau_A`) with compatibility alias `F_O`; condition number guard; `joint_reaction_forces` backward-compatible wrapper |
+| `src/mech390/physics/mass_properties.py` | Link and slider mass, volume, and MOI helpers; `link_area_moments_gross` / `slider_area_moments_gross` for cross-section properties; kinematic COG helpers (`crank_cog`, `rod_cog`, `slider_cog`); `MassPropertiesResult` dataclass; `compute_design_mass_properties` design-level aggregator |
+| `src/mech390/physics/stresses.py` | **Stub** — stress formulas not yet implemented |
+| `src/mech390/physics/fatigue.py` | **Empty** — reserved for future fatigue analysis |
+| `src/mech390/physics/engine.py` | 15° crank-angle sweep; orchestrates kinematics → dynamics → stresses (placeholder); tracks peak sigma and tau; returns `sigma_max`, `tau_max`, crank angles at maxima, `valid_physics` flag |
+| `src/mech390/datagen/sampling.py` | `sample_scalar` utility; `LatinHypercubeSampler` class using `scipy.stats.qmc`; `get_sampler` factory (supports `latin_hypercube` and `random`) |
+| `src/mech390/datagen/stage1_kinematic.py` | Pre-feasibility constrained (l,e) candidate generation; closed-form `solve_for_r_given_rom`; branch-feasibility and residual ROM checks; optional user constraint expressions; dead-center and QRR verification; `iter_valid_2d_mechanisms` (streaming) and `generate_valid_2d_mechanisms` (list) |
+| `src/mech390/datagen/stage2_embodiment.py` | Streaming 3D expansion `iter_expand_to_3d`; width/pin feasibility constraints; seed diversification per 2D design; `expand_to_3d` list wrapper; mass properties and stress calls are TODO stubs |
+| `src/mech390/datagen/generate.py` | `generate_dataset` orchestrator; streaming Stage-2 consumption; physics evaluation with fallback mock; `_apply_limits` for utilization and pass/fail; `DatasetResult` container |
+| `src/mech390/ml/features.py` | Feature selection and scaling (**stub**) |
+| `src/mech390/ml/models.py` | ML model architectures (**stub**) |
+| `src/mech390/ml/train.py` | Training loop (**stub**) |
+| `src/mech390/ml/infer.py` | Prediction utilities (**stub**) |
+| `scripts/generate_dataset.py` | CLI entry point for dataset generation (**stub**) |
+| `scripts/preview_stage1.py` | CLI script: runs Stage 1, streams results to CSV; supports `--config`, `--seed`, `--out-dir`; prints descriptive statistics |
+| `scripts/debug_stage1.py` | Quick debug runner for Stage 1 using baseline config; prints first 5 designs and statistics |
+| `scripts/train_model.py` | CLI entry point for ML training (**stub**) |
+| `scripts/optimize_config.py` | CLI entry point for ML-based design evaluation (**stub**) |
+| `tests/test_datagen_units.py` | Unit tests for data generation pipeline |
+| `data/stage1_preview/stage1_geometries.csv` | Output CSV from `preview_stage1.py` (columns: r, l, e, ROM, QRR, theta_min, theta_max) |
