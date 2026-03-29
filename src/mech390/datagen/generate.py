@@ -161,6 +161,19 @@ def generate_dataset(config: Dict[str, Any], seed: int = None) -> DatasetResult:
             except Exception as exc:
                 logger.warning("Mass properties failed for design #%d: %s", n_stage2, exc)
 
+        # Inject material properties and operating params required by
+        # stresses.py, fatigue.py, and buckling.py.
+        material_cfg = config.get('material', {})
+        design_eval['E']             = float(material_cfg.get('E',             73.1e9))
+        design_eval['S_ut']          = float(material_cfg.get('S_ut',          483e6))
+        design_eval['S_y']           = float(material_cfg.get('S_y',           345e6))
+        design_eval['S_prime_e']     = float(material_cfg.get('S_prime_e',     130e6))
+        design_eval['sigma_f_prime'] = float(material_cfg.get('sigma_f_prime', 807e6))
+        design_eval['n_rpm']         = rpm
+        design_eval['total_cycles']  = float(
+            config.get('operating', {}).get('TotalCycles', 18720000)
+        )
+
         case = design_eval.copy()
         metrics = _evaluate_physics(design_eval, engine)
         case.update(metrics)
