@@ -4,6 +4,15 @@ material:
   rho: {min: 7800, max: 7800}
   yield_stress: {min: 100e6, max: 100e6}
   yield_shear_stress: {min: 100e6, max: 100e6}
+  # 2024-T3 Aluminium mechanical properties for stress / fatigue / buckling analysis
+  # Mother Doc v7 Section 10.1 — all values in SI units (Pa, dimensionless)
+  E: 73.1e9             # Elastic modulus (Pa)
+  S_ut: 483e6           # Ultimate tensile strength (Pa)
+  S_y: 345e6            # Yield strength, 0.2% offset (Pa)
+  S_prime_e: 130e6      # Reference fatigue strength at 10^8 cycles (Pa)
+  sigma_f_prime: 807e6  # Fatigue strength coefficient ≈ 1.67 * S_ut (Pa)
+  G: 28e9               # Shear modulus (Pa)
+  nu: 0.33              # Poisson's ratio
 
 geometry:
   r: {min: 0.04, max: 0.15}        # crank radius (m)
