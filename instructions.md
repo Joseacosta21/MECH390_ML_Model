@@ -19,15 +19,9 @@
 
 Read `CLAUDE.md` now if you have not already done so.
 
-### Known bugs (confirmed — do not ignore)
+### Known bugs
 
-These issues are documented and must be considered whenever touching the affected files:
-
-| # | File | Line | Issue | Impact |
-|---|---|---|---|---|
-| 1 | `src/mech390/datagen/generate.py` | ~144–150 | `omega` not set in design dict before `engine.evaluate_design()` — defaults to 1.0 rad/s instead of `RPM × 2π/60`. Mass properties also not merged before the physics call. | Forces scale as ω² — currently ~10× wrong when using `generate_dataset()` |
-| 2 | `src/mech390/physics/kinematics.py` | 290 | Sign error: `a_By = -alpha2 * r * cos(theta)` should be `+alpha2 * r * cos(theta)` | No current impact (`alpha_r` always 0.0), but formula is wrong |
-| 3 | `src/mech390/physics/mass_properties.py` | 208–209 | Hole offsets in `link_mass_moi_cg_z` use `±c/2`, exact only when `d_left == d_right` | Minor MOI error for asymmetric pin diameters |
+No confirmed open bugs. If a new issue is found, document it here with: file, line, description, and impact.
 
 ---
 
