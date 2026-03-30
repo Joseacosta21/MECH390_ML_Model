@@ -32,9 +32,31 @@
 
 ## 1. What this project is
 
-A **physics-first data generation and ML pipeline** for the offset crank–slider mechanism.
+A **physics-first data generation and ML pipeline** for the offset crank–slider mechanism, built for the MECH 390 Winter 2026 design project at Concordia University.
 
 Physics generates the data. ML learns pass/fail patterns from it. No ML shortcuts replace the physics.
+
+**Design specifications (fixed — not design variables):**
+
+| Spec | Value |
+|---|---|
+| Reaction force (slider load) | 500 g (~4.905 N) |
+| Range of motion (ROM target) | 250 mm ± 0.5 mm |
+| Input speed | 30 RPM |
+| Quick return ratio (QRR) | 1.5 – 2.5 |
+| Link material | Aluminum |
+| Link geometry | Rectangular cross-section |
+
+**What the ML model must predict:**
+- Pass/fail classification for a given design configuration
+- Minimum safety factors (static and fatigue)
+- Optimal QRR to minimize crank torque and motor power
+
+**Optimization objectives (Week 8):**
+- Minimize mechanism envelope (size and weight)
+- Minimize required motor power while satisfying all design targets
+
+> CAD modeling, 3D-printed prototype, and the written report are handled outside this repository.
 
 ---
 
@@ -205,36 +227,35 @@ python3 -m venv .venv
 > **For agents and contributors:** This is the full project backlog. It spans many sessions.
 > Complete one or two items per session — validate, commit, push, then stop.
 > Physics changes → **Physics Validator**. Signature changes → **Cross-Reference Auditor**. New data → **Data Quality Checker**.
+>
+> Academic schedule reference: Weeks 4–5 = dataset generation, Weeks 6–7 = ML training + validation, Week 8 = optimization + visualization.
 
-### High priority
+### High priority (Weeks 4–5 — dataset generation)
 
 - [ ] **Implement `generate_dataset.py` CLI** — argparse + `generate.generate_dataset()` + write `all_cases.csv` / `train_pass.csv`. Run Data Quality Checker after.
+- [ ] **Generate large dataset** — run with `n_samples ≥ 10000`, save to `data/raw/`. Run ML Readiness Inspector before training.
 - [ ] **Fix post-rounding duplicates in Stage 2** — add seen-set check after rounding to prevent identical geometry rows.
 - [ ] **Fill `configs/generate/aggressive.yaml`** — wider ranges, higher n_samples (reference: `baseline.yaml`)
+- [ ] **Populate `data/splits/`** — train/val/test split CSVs from the full dataset
 
-### ML pipeline (not started)
+### ML pipeline (Weeks 6–7)
 
 - [ ] **`ml/features.py`** — drop zero-variance columns (`rho`, `I_area_slider_*`), scale features, flag leakage columns (`utilization`, `sigma_max`, `tau_max`)
-- [ ] **`ml/models.py`** — binary classifier (Random Forest or XGBoost) for pass/fail + regressor for `utilization`. Use scikit-learn.
-- [ ] **`ml/train.py`** — load dataset, apply feature pipeline, fit, evaluate, save to `data/models/`
+- [ ] **`ml/models.py`** — binary classifier (Random Forest or XGBoost) for pass/fail + regressor for `utilization` (minimum safety factor proxy). Use scikit-learn.
+- [ ] **`ml/train.py`** — load dataset, apply feature pipeline, train/val/test split, hyperparameter tuning, evaluate with R², RMSE, and loss-vs-iteration; save to `data/models/`
 - [ ] **`ml/infer.py`** — load saved model, accept design dict, return prediction + confidence
 - [ ] **`train_model.py` CLI** — argparse wrapper around `ml/train.py`
 - [ ] **Fill `configs/train/classifier.yaml` and `regression.yaml`**
 
-### Physics — future work
+### Optimization and visualization (Week 8)
+
+- [ ] **`optimize_config.py` CLI** — use trained ML model as surrogate to sweep design space; rank candidates by pass probability, minimize envelope and motor power. Cross-check top candidates against physics engine.
+- [ ] **Fill `configs/optimize/search.yaml`** — define search bounds and optimization objectives (minimize size/weight and required motor power)
+- [ ] **Sensitivity plots** — plot each input feature vs `utilization` / `pass_fail` to show which design parameters matter most
+- [ ] **Parameter correlation map** — heatmap of feature–target correlations across the full dataset
+
+### Physics and testing
 
 - [ ] **`preview_stresses.py`** — like `preview_forces.py` but outputs σ/τ per angle
-- [ ] **`optimize_config.py` CLI** — ML-based design space search; rank candidates by pass probability
-- [ ] **Fill `configs/optimize/search.yaml`**
-
-### Data and testing
-
-- [ ] **Generate large dataset** — once stresses done, run with `n_samples ≥ 10000`, save to `data/raw/`
-- [ ] **Run ML Readiness Inspector** before any training run
 - [ ] **Expand `test_datagen_units.py`** — add dynamics, mass properties, and stress tests
 - [ ] **Add regression tests** — fixed-seed full pipeline run vs reference snapshot
-- [ ] **Populate `data/splits/`** — train/val/test split CSVs from full dataset
-
-### Documentation
-
-- [ ] **Add pipeline architecture diagram** to `assets/`
