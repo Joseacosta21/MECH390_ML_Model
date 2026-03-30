@@ -9,11 +9,26 @@ It defines the available subagents and the rules for using them.
 
 This project generates synthetic datasets for an **offset crank-slider mechanism**
 using exact kinematics and dynamics equations, then trains ML models on those datasets.
+It is the data generation and ML component of the MECH 390 Winter 2026 design project
+at Concordia University. CAD, prototyping, and the written report are handled externally.
+
+**Design specifications (fixed — not design variables):**
+- Reaction force (slider load): 500 g 
+- Range of motion: 250 mm ± 0.5 mm
+- Input speed: 30 RPM
+- Quick return ratio (QRR): 1.5 – 2.5
+- Link material: Aluminum, rectangular cross-section
+
+**What the ML model must deliver (Weeks 6–8):**
+- Pass/fail classification for design configurations
+- Safety factor prediction (static and fatigue)
+- Optimal QRR recommendation to minimize crank torque and motor power
+- Design space exploration to minimize mechanism size and weight
 
 **Pipeline:**
 ```
 Config (YAML) → Stage 1: 2D Kinematic Synthesis → Stage 2: 3D Embodiment
-→ Mass Properties → Physics Evaluation (15° sweep) → Pass/Fail → ML Training
+→ Mass Properties → Physics Evaluation (15° sweep) → Pass/Fail → ML Training → Optimization
 ```
 
 **Key files:**
