@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from mech390.datagen import stage1_kinematic, stage2_embodiment
+from mech390.physics._utils import get_or_warn
 
 # Try to import physics engine and mass_properties, or mock if not available
 try:
@@ -133,17 +134,19 @@ def generate_dataset(config: Dict[str, Any], seed: int = None) -> DatasetResult:
 
     results = []
 
+    _ctx = 'generate.generate_dataset'
     limits = config.get('limits', {})
-    sigma_allow = limits.get('sigma_allow', 1e20)
-    tau_allow = limits.get('tau_allow', 1e20)
-    safety_factor = limits.get('safety_factor', 1.0)
-    mu_default = float(config.get('operating', {}).get('mu', 0.0))
+    sigma_allow = get_or_warn(limits, 'sigma_allow', 1e20, context=_ctx)
+    tau_allow = get_or_warn(limits, 'tau_allow', 1e20, context=_ctx)
+    safety_factor = get_or_warn(limits, 'safety_factor', 1.0, context=_ctx)
+    operating_cfg = config.get('operating', {})
+    mu_default = float(get_or_warn(operating_cfg, 'mu', 0.0, context=_ctx))
 
     sigma_limit = sigma_allow / safety_factor
     tau_limit = tau_allow / safety_factor
 
     # Compute omega once — same for every design in this run.
-    rpm = float(config.get('operating', {}).get('RPM', 30))
+    rpm = float(get_or_warn(operating_cfg, 'RPM', 30, context=_ctx))
     omega = rpm * 2.0 * np.pi / 60.0
 
     n_stage2 = 0
@@ -163,16 +166,27 @@ def generate_dataset(config: Dict[str, Any], seed: int = None) -> DatasetResult:
 
         # Inject material properties and operating params required by
         # stresses.py, fatigue.py, and buckling.py.
+        _mcfg = 'generate: config.material'
         material_cfg = config.get('material', {})
-        design_eval['E']             = float(material_cfg.get('E',             73.1e9))
-        design_eval['S_ut']          = float(material_cfg.get('S_ut',          483e6))
-        design_eval['S_y']           = float(material_cfg.get('S_y',           345e6))
-        design_eval['S_prime_e']     = float(material_cfg.get('S_prime_e',     130e6))
-        design_eval['sigma_f_prime'] = float(material_cfg.get('sigma_f_prime', 807e6))
+        design_eval['E']             = float(get_or_warn(material_cfg, 'E',             73.1e9, context=_mcfg))
+        design_eval['S_ut']          = float(get_or_warn(material_cfg, 'S_ut',          483e6,  context=_mcfg))
+        design_eval['S_y']           = float(get_or_warn(material_cfg, 'S_y',           345e6,  context=_mcfg))
+        design_eval['S_prime_e']     = float(get_or_warn(material_cfg, 'S_prime_e',     130e6,  context=_mcfg))
+        design_eval['sigma_f_prime'] = float(get_or_warn(material_cfg, 'sigma_f_prime', 807e6,  context=_mcfg))
         design_eval['n_rpm']         = rpm
         design_eval['total_cycles']  = float(
-            config.get('operating', {}).get('TotalCycles', 18720000)
+            get_or_warn(operating_cfg, 'TotalCycles', 18720000, context=_ctx)
         )
+
+        # Inject configurable stress-analysis constants from baseline.yaml.
+        _sacfg = 'generate: config.stress_analysis'
+        sa_cfg = config.get('stress_analysis', {})
+        design_eval['delta']            = float(get_or_warn(sa_cfg, 'delta',            1e-4,   context=_sacfg))
+        design_eval['Kt_lug']           = float(get_or_warn(sa_cfg, 'Kt_lug',          2.34,   context=_sacfg))
+        design_eval['Kt_hole_torsion']  = float(get_or_warn(sa_cfg, 'Kt_hole_torsion', 4.0,    context=_sacfg))
+        design_eval['n_buck_target']    = float(get_or_warn(sa_cfg, 'n_buck_target',    3.0,    context=_sacfg))
+        design_eval['N_basquin_anchor'] = float(get_or_warn(sa_cfg, 'N_basquin_anchor', 2.0e6,  context=_sacfg))
+        design_eval['z_a_reliability']  = float(get_or_warn(sa_cfg, 'z_a_reliability',  3.091,  context=_sacfg))
 
         case = design_eval.copy()
         metrics = _evaluate_physics(design_eval, engine)

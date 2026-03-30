@@ -22,12 +22,14 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, Sequence
 
+from mech390.physics._utils import get_or_warn
+
 # ---------------------------------------------------------------------------
 # Buckling constants — Mother Doc Section 14
 # ---------------------------------------------------------------------------
-_K_C: float = 1.0          # Effective length factor — pin-pin ends (Eq 14.3)
-_N_BUCK_TARGET: float = 3.0  # Target buckling safety factor for machinery (Eq 14.5)
-_E_DEFAULT: float = 73.1e9  # 2024-T3 Al elastic modulus fallback (Pa)
+_K_C: float = 1.0                  # Effective length factor — pin-pin ends (Eq 14.3)
+_N_BUCK_TARGET_DEFAULT: float = 3.0  # baseline.yaml stress_analysis.n_buck_target
+_E_DEFAULT: float = 73.1e9          # 2024-T3 Al elastic modulus fallback (Pa)
 
 
 def evaluate(
@@ -68,10 +70,12 @@ def evaluate(
           'passed'         : bool  — True if n_buck >= 3.0
           'has_compression': bool  — True if any angle has F_r,rod,B < 0
     """
+    _ctx = 'buckling.evaluate'
     w = float(design['width_l'])       # rod width (in-plane, longer dimension)
     t = float(design['thickness_l'])   # rod thickness (out-of-plane, shorter)
     L = float(design['l'])             # rod length (centre distance)
-    E = float(design.get('E', _E_DEFAULT))
+    E = float(get_or_warn(design, 'E', _E_DEFAULT, context=_ctx))
+    n_buck_target = float(get_or_warn(design, 'n_buck_target', _N_BUCK_TARGET_DEFAULT, context=_ctx))
 
     # --- Eq 14.2: Second moment of area about weak axis ---
     # I_min,r = I_yr = w_rod * t_rod^3 / 12
@@ -101,6 +105,6 @@ def evaluate(
         'P_cr':            P_cr,
         'N_max_comp':      N_max_comp,
         'n_buck':          n_buck,
-        'passed':          n_buck >= _N_BUCK_TARGET,
+        'passed':          n_buck >= n_buck_target,
         'has_compression': has_compression,
     }
