@@ -69,8 +69,8 @@ configs/generate/baseline.yaml
            │
            ▼
 ┌─────────────────────────┐
-│  Stress Evaluation      │  stresses.py  ← STUB
-│                         │  σ, τ from joint forces (not yet implemented)
+│  Stress + Fatigue +     │  stresses.py, fatigue.py, buckling.py
+│  Buckling Evaluation    │  σ, τ per angle; Goodman/Miner; Euler buckling
 └──────────┬──────────────┘
            │ sigma_max, tau_max
            ▼
@@ -130,13 +130,14 @@ MECH390_ML_Model/
 ├── src/mech390/
 │   ├── config.py                # ✅ Config loading, normalization, validation
 │   ├── physics/
+│   │   ├── _utils.py            # ✅ Shared utilities (get_or_warn fallback logging)
 │   │   ├── kinematics.py        # ✅ Positions, velocities, accelerations, ROM/QRR
 │   │   ├── dynamics.py          # ✅ Newton-Euler 8×8 solver
 │   │   ├── mass_properties.py   # ✅ Mass, MOI, COG helpers + design aggregator
-│   │   ├── engine.py            # ✅ 15° sweep (stress placeholder = 0.0)
-│   │   ├── stresses.py          # 🔲 STUB — not implemented
-│   │   ├── fatigue.py           # 🔲 EMPTY
-│   │   └── buckling.py          # 🔲 EMPTY
+│   │   ├── engine.py            # ✅ 15° sweep orchestrator
+│   │   ├── stresses.py          # ✅ σ, τ per crank angle (axial, bending, torsion, shear)
+│   │   ├── fatigue.py           # ✅ Marin factors, Modified Goodman, Basquin, Miner's rule
+│   │   └── buckling.py          # ✅ Euler buckling check (pin-pin, weak axis)
 │   ├── datagen/
 │   │   ├── sampling.py          # ✅ LHS + random sampler
 │   │   ├── stage1_kinematic.py  # ✅ Full Stage 1 (streaming iterator)
@@ -197,8 +198,6 @@ python3 -m venv .venv
 | 3 | `mass_properties.py:208` | Pin hole MOI offsets only exact for equal pin diameters | ✅ Fixed — `bugfix/physics_corrections` |
 | 4 | `stage2_embodiment.py` | No post-rounding uniqueness check — duplicates possible | ⚠️ Open |
 
-> `main` branch still has bugs 1–3. `bugfix/physics_corrections` is ready to merge.
-
 ---
 
 ## 6. To-Do list
@@ -209,17 +208,9 @@ python3 -m venv .venv
 
 ### High priority
 
-- [ ] **Merge `bugfix/physics_corrections` → `main`**
-- [ ] **Implement `stresses.py`** — σ = F/A + M·c/I (bending), τ = VQ/Ib at pin holes. Biggest blocker for real pass/fail. Read `instructions.md` §6–7 first. Run Physics Validator after.
-- [ ] **Wire stresses into `engine.py`** — replace `sigma, tau = 0.0, 0.0` placeholder. Run Physics Validator + Cross-Reference Auditor after.
-- [ ] **Wire stresses into `stage2_embodiment.py`** — fill the TODO stubs for mass props and stress. Run Cross-Reference Auditor after.
-
-### Medium priority
-
 - [ ] **Implement `generate_dataset.py` CLI** — argparse + `generate.generate_dataset()` + write `all_cases.csv` / `train_pass.csv`. Run Data Quality Checker after.
 - [ ] **Fix post-rounding duplicates in Stage 2** — add seen-set check after rounding to prevent identical geometry rows.
 - [ ] **Fill `configs/generate/aggressive.yaml`** — wider ranges, higher n_samples (reference: `baseline.yaml`)
-- [ ] **Update `instructions.md` Known Bugs table** — bugs 1–3 are fixed; table still shows them as open.
 
 ### ML pipeline (not started)
 
@@ -232,9 +223,7 @@ python3 -m venv .venv
 
 ### Physics — future work
 
-- [ ] **`fatigue.py`** — Goodman/Miner's rule using `TotalCycles` and alternating/mean stress
-- [ ] **`buckling.py`** — Euler buckling check for connecting rod under compression
-- [ ] **`preview_stresses.py`** — like `preview_forces.py` but outputs σ/τ per angle (after `stresses.py` done)
+- [ ] **`preview_stresses.py`** — like `preview_forces.py` but outputs σ/τ per angle
 - [ ] **`optimize_config.py` CLI** — ML-based design space search; rank candidates by pass probability
 - [ ] **Fill `configs/optimize/search.yaml`**
 
@@ -248,5 +237,4 @@ python3 -m venv .venv
 
 ### Documentation
 
-- [ ] **Add stress formulas to `instructions.md`** once `stresses.py` is implemented
 - [ ] **Add pipeline architecture diagram** to `assets/`
