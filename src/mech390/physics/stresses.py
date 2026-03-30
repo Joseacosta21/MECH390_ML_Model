@@ -56,19 +56,14 @@ from typing import Any, Dict, Tuple
 import numpy as np
 
 from mech390.physics import kinematics
+from mech390.physics._utils import get_or_warn
 
 # ---------------------------------------------------------------------------
-# Default diametral clearance
+# Fallback defaults (overridden by config via design dict)
 # ---------------------------------------------------------------------------
-# D_hole = D_pin + _DELTA_DEFAULT
-# 0.1 mm (1e-4 m) is a typical close-running fit clearance for small pins.
-# TODO: Replace with design['delta_A/B/C'] once clearance is added to Stage 2.
-_DELTA_DEFAULT: float = 1e-4  # 0.1 mm diametral clearance (m)
-
-# Kt_fixed = 2.34 applied to net-section area Z_r or Z_c at each pin hole.
-# Conservative estimate for single-shear round-ended lugs.
-# Ref: Mother Doc Section 8.1 and Eqs 4.7, 6.8.
-_KT_FIXED: float = 2.34
+_DELTA_DEFAULT: float = 1e-4   # diametral clearance (m) — baseline.yaml stress_analysis.delta
+_KT_LUG_DEFAULT: float = 2.34  # lug Kt — baseline.yaml stress_analysis.Kt_lug
+_KT_HOLE_TORSION_DEFAULT: float = 4.0  # hole torsion Kt — baseline.yaml stress_analysis.Kt_hole_torsion
 
 # ---------------------------------------------------------------------------
 # Saint-Venant torsion coefficient (Roark approximation)
@@ -181,8 +176,14 @@ def _rod_stresses(
     D_pC = design['pin_diameter_C']
     I_yr = design['I_area_rod_yy']  # w*t^3/12 — out-of-plane bending (weak axis)
     I_zr = design['I_area_rod_zz']  # t*w^3/12 — in-plane bending (strong axis)
-    g    = design.get('g', 9.81)
-    m_rod = design.get('mass_rod', 0.0)
+    _ctx = 'stresses._rod_stresses'
+    g    = get_or_warn(design, 'g', 9.81, context=_ctx)
+    m_rod = get_or_warn(design, 'mass_rod', 0.0, context=_ctx)
+
+    # Configurable stress-analysis constants (from baseline.yaml via design dict)
+    delta    = get_or_warn(design, 'delta', _DELTA_DEFAULT, context=_ctx)
+    Kt_lug   = get_or_warn(design, 'Kt_lug', _KT_LUG_DEFAULT, context=_ctx)
+    Kt_hole  = get_or_warn(design, 'Kt_hole_torsion', _KT_HOLE_TORSION_DEFAULT, context=_ctx)
 
     # i_offset: out-of-plane offset at Pin B joint (Mother Doc)
     i_offset = (design['thickness_l'] + design['thickness_r']) / 2.0
@@ -212,12 +213,12 @@ def _rod_stresses(
 
     # --- Axial hole stress (Mother Doc Eq 4.7) ---
     # Z_r,B = (w_rod - D_B_hole) * t_rod
-    D_B_hole = D_pB + _DELTA_DEFAULT
-    D_C_hole = D_pC + _DELTA_DEFAULT
+    D_B_hole = D_pB + delta
+    D_C_hole = D_pC + delta
     Z_r_B = max(w - D_B_hole, 1e-9) * t
     Z_r_C = max(w - D_C_hole, 1e-9) * t
-    sigma_ax_hole_B = _KT_FIXED * abs(F_r_B) / Z_r_B
-    sigma_ax_hole_C = _KT_FIXED * abs(F_r_C) / Z_r_C
+    sigma_ax_hole_B = Kt_lug * abs(F_r_B) / Z_r_B
+    sigma_ax_hole_C = Kt_lug * abs(F_r_C) / Z_r_C
 
     # --- Out-of-plane bending stress at Pin B (Mother Doc Eq 5.5) ---
     # M_eta,rod,B = F_r,rod,B * i_offset
@@ -239,9 +240,9 @@ def _rod_stresses(
     tau_nom_hole_B = T_rod / (beta_r * w**2 * t * hole_factor_B)
     tau_nom_hole_C = T_rod / (beta_r * w**2 * t * hole_factor_C)
 
-    # Peak hole torsional shear — Kt_u1 = 4 (Peterson 4.9.1, conservative)
-    tau_max_hole_B = 4.0 * tau_nom_hole_B
-    tau_max_hole_C = 4.0 * tau_nom_hole_C
+    # Peak hole torsional shear — Kt_hole_torsion (Peterson 4.9.1, conservative)
+    tau_max_hole_B = Kt_hole * tau_nom_hole_B
+    tau_max_hole_C = Kt_hole * tau_nom_hole_C
 
     # --- Transverse shear (Mother Doc Eq 4.8) ---
     tau_xy_B = abs(F_t_B) / A_r
@@ -312,9 +313,15 @@ def _crank_stresses(
     I_zc = design['I_area_crank_zz'] # t*w^3/12 — in-plane bending (strong axis)
     # T_in: motor input torque from Newton-Euler solver at this theta (N*m).
     # Injected into design dict by engine.py as design['tau_A'] = forces['tau_A'].
-    T_in = design.get('tau_A', 0.0)
-    g    = design.get('g', 9.81)
-    m_crank = design.get('mass_crank', 0.0)
+    _ctx = 'stresses._crank_stresses'
+    T_in = get_or_warn(design, 'tau_A', 0.0, context=_ctx)
+    g    = get_or_warn(design, 'g', 9.81, context=_ctx)
+    m_crank = get_or_warn(design, 'mass_crank', 0.0, context=_ctx)
+
+    # Configurable stress-analysis constants (from baseline.yaml via design dict)
+    delta    = get_or_warn(design, 'delta', _DELTA_DEFAULT, context=_ctx)
+    Kt_lug   = get_or_warn(design, 'Kt_lug', _KT_LUG_DEFAULT, context=_ctx)
+    Kt_hole  = get_or_warn(design, 'Kt_hole_torsion', _KT_HOLE_TORSION_DEFAULT, context=_ctx)
 
     # i_offset: out-of-plane offset at Pin B joint (Mother Doc)
     i_offset = (design['thickness_l'] + design['thickness_r']) / 2.0
@@ -342,12 +349,12 @@ def _crank_stresses(
     sigma_ax_body_A = abs(F_r_crank_A) / A_c + abs(M_crank_max) * c_zc / I_zc
 
     # --- Axial hole stress (Mother Doc Eq 6.8) ---
-    D_B_hole = D_pB + _DELTA_DEFAULT
-    D_A_hole = D_pA + _DELTA_DEFAULT
+    D_B_hole = D_pB + delta
+    D_A_hole = D_pA + delta
     Z_c_B = max(w - D_B_hole, 1e-9) * t
     Z_c_A = max(w - D_A_hole, 1e-9) * t
-    sigma_ax_hole_B = _KT_FIXED * abs(F_r_crank_B) / Z_c_B
-    sigma_ax_hole_A = _KT_FIXED * abs(F_r_crank_A) / Z_c_A
+    sigma_ax_hole_B = Kt_lug * abs(F_r_crank_B) / Z_c_B
+    sigma_ax_hole_A = Kt_lug * abs(F_r_crank_A) / Z_c_A
 
     # --- Out-of-plane bending stress at Pin B (Mother Doc Eq 6.10) ---
     M_eta_crank_B = abs(F_r_crank_B) * i_offset
@@ -372,9 +379,9 @@ def _crank_stresses(
     tau_nom_hole_B = T_total / (beta_c * w * t**2 * hole_factor_B)
     tau_nom_hole_A = T_total / (beta_c * w * t**2 * hole_factor_A)
 
-    # Peak hole torsional shear — Kt_u1 = 4 (conservative, Peterson 4.9.1)
-    tau_max_hole_B = 4.0 * tau_nom_hole_B
-    tau_max_hole_A = 4.0 * tau_nom_hole_A
+    # Peak hole torsional shear — Kt_hole_torsion (Peterson 4.9.1, conservative)
+    tau_max_hole_B = Kt_hole * tau_nom_hole_B
+    tau_max_hole_A = Kt_hole * tau_nom_hole_A
 
     # --- Transverse shear ---
     tau_xy_B = abs(F_t_crank_B) / A_c
