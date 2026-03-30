@@ -20,6 +20,7 @@ from mech390.physics import (
     mass_properties,
     stresses,
 )
+from mech390.physics._utils import get_or_warn
 
 
 def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
@@ -72,19 +73,20 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
             'buckling_passed'  : bool
             + all keys from fatigue.evaluate() (suffixed _rod, _crank, _pin)
     """
+    _ctx = 'engine.evaluate_design'
     r      = design['r']
     l      = design['l']
     e      = design['e']
-    omega  = design.get('omega', 1.0)
+    omega  = get_or_warn(design, 'omega', 1.0, context=_ctx)
 
-    mass_crank  = design.get('mass_crank',  1.0)
-    mass_rod    = design.get('mass_rod',    1.0)
-    mass_slider = design.get('mass_slider', 1.0)
-    i_crank     = design.get('I_mass_crank_cg_z', 1.0)
-    i_rod       = design.get('I_mass_rod_cg_z',   1.0)
-    mu          = design.get('mu',    0.0)
-    g           = design.get('g',    9.81)
-    alpha_r     = design.get('alpha_r', 0.0)
+    mass_crank  = get_or_warn(design, 'mass_crank',  1.0, context=_ctx)
+    mass_rod    = get_or_warn(design, 'mass_rod',    1.0, context=_ctx)
+    mass_slider = get_or_warn(design, 'mass_slider', 1.0, context=_ctx)
+    i_crank     = get_or_warn(design, 'I_mass_crank_cg_z', 1.0, context=_ctx)
+    i_rod       = get_or_warn(design, 'I_mass_rod_cg_z',   1.0, context=_ctx)
+    mu          = get_or_warn(design, 'mu',    0.0, context=_ctx)
+    g           = get_or_warn(design, 'g',    9.81, context=_ctx)
+    alpha_r     = get_or_warn(design, 'alpha_r', 0.0, context=_ctx)
 
     # 15-degree sweep over one full revolution
     thetas = np.deg2rad(np.arange(0, 360, 15))
