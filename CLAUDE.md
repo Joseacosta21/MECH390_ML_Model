@@ -9,11 +9,26 @@ It defines the available subagents and the rules for using them.
 
 This project generates synthetic datasets for an **offset crank-slider mechanism**
 using exact kinematics and dynamics equations, then trains ML models on those datasets.
+It is the data generation and ML component of the MECH 390 Winter 2026 design project
+at Concordia University. CAD, prototyping, and the written report are handled externally.
+
+**Design specifications (fixed — not design variables):**
+- Reaction force (slider load): 500 g 
+- Range of motion: 250 mm ± 0.5 mm
+- Input speed: 30 RPM
+- Quick return ratio (QRR): 1.5 – 2.5
+- Link material: Aluminum, rectangular cross-section
+
+**What the ML model must deliver (Weeks 6–8):**
+- Pass/fail classification for design configurations
+- Safety factor prediction (static and fatigue)
+- Optimal QRR recommendation to minimize crank torque and motor power
+- Design space exploration to minimize mechanism size and weight
 
 **Pipeline:**
 ```
 Config (YAML) → Stage 1: 2D Kinematic Synthesis → Stage 2: 3D Embodiment
-→ Mass Properties → Physics Evaluation (15° sweep) → Pass/Fail → ML Training
+→ Mass Properties → Physics Evaluation (15° sweep) → Pass/Fail → ML Training → Optimization
 ```
 
 **Key files:**
@@ -58,7 +73,8 @@ cross-references are correct after any change to physics-related code.
 **What this agent does:**
 1. Reads `instructions.md` for the authoritative derivations
 2. Reads all edited physics files (`kinematics.py`, `dynamics.py`,
-   `mass_properties.py`, `engine.py`, `stresses.py`)
+   `mass_properties.py`, `engine.py`, `stresses.py`, `fatigue.py`,
+   `buckling.py`, `_utils.py`)
 3. Checks every equation against the reference derivations:
    - Sign conventions (especially alpha terms, gravity direction, friction direction)
    - Unit consistency (all SI: meters, kg, radians, Pascals, Newtons)
@@ -94,7 +110,7 @@ across every module boundary in the project.
    - Config dict keys used in code exist in `configs/generate/baseline.yaml`
    - Dict keys returned by one function and consumed by another are consistent
      (e.g., `compute_design_mass_properties` returns `I_mass_crank_cg_z` and
-     `engine.py` reads `design.get('I_mass_crank_cg_z', 1.0)`)
+     `engine.py` reads it via `get_or_warn(design, 'I_mass_crank_cg_z', ...)`)
 3. Flags any mismatch with the file path and line number of both sides
 4. Reports a summary table: function | caller file | callee file | status
 
@@ -167,8 +183,7 @@ class balance, feature distributions, potential leakage, and dataset size.
 
 ## Known Issues (Physics)
 
-All three previously confirmed bugs have been fixed in `bugfix/physics_corrections`.
-No open known issues remain. If new bugs are found, document them here.
+No confirmed open bugs. If new bugs are found, document them here and in `instructions.md`.
 
 ---
 

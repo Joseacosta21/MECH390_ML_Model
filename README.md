@@ -32,9 +32,31 @@
 
 ## 1. What this project is
 
-A **physics-first data generation and ML pipeline** for the offset crank–slider mechanism.
+A **physics-first data generation and ML pipeline** for the offset crank–slider mechanism, built for the MECH 390 Winter 2026 design project at Concordia University.
 
 Physics generates the data. ML learns pass/fail patterns from it. No ML shortcuts replace the physics.
+
+**Design specifications (fixed — not design variables):**
+
+| Spec | Value |
+|---|---|
+| Reaction force (slider load) | 500 g (~4.905 N) |
+| Range of motion (ROM target) | 250 mm ± 0.5 mm |
+| Input speed | 30 RPM |
+| Quick return ratio (QRR) | 1.5 – 2.5 |
+| Link material | Aluminum |
+| Link geometry | Rectangular cross-section |
+
+**What the ML model must predict:**
+- Pass/fail classification for a given design configuration
+- Minimum safety factors (static and fatigue)
+- Optimal QRR to minimize crank torque and motor power
+
+**Optimization objectives (Week 8):**
+- Minimize mechanism envelope (size and weight)
+- Minimize required motor power while satisfying all design targets
+
+> CAD modeling, 3D-printed prototype, and the written report are handled outside this repository.
 
 ---
 
@@ -69,8 +91,8 @@ configs/generate/baseline.yaml
            │
            ▼
 ┌─────────────────────────┐
-│  Stress Evaluation      │  stresses.py  ← STUB
-│                         │  σ, τ from joint forces (not yet implemented)
+│  Stress + Fatigue +     │  stresses.py, fatigue.py, buckling.py
+│  Buckling Evaluation    │  σ, τ per angle; Goodman/Miner; Euler buckling
 └──────────┬──────────────┘
            │ sigma_max, tau_max
            ▼
@@ -130,13 +152,14 @@ MECH390_ML_Model/
 ├── src/mech390/
 │   ├── config.py                # ✅ Config loading, normalization, validation
 │   ├── physics/
+│   │   ├── _utils.py            # ✅ Shared utilities (get_or_warn fallback logging)
 │   │   ├── kinematics.py        # ✅ Positions, velocities, accelerations, ROM/QRR
 │   │   ├── dynamics.py          # ✅ Newton-Euler 8×8 solver
 │   │   ├── mass_properties.py   # ✅ Mass, MOI, COG helpers + design aggregator
-│   │   ├── engine.py            # ✅ 15° sweep (stress placeholder = 0.0)
-│   │   ├── stresses.py          # 🔲 STUB — not implemented
-│   │   ├── fatigue.py           # 🔲 EMPTY
-│   │   └── buckling.py          # 🔲 EMPTY
+│   │   ├── engine.py            # ✅ 15° sweep orchestrator
+│   │   ├── stresses.py          # ✅ σ, τ per crank angle (axial, bending, torsion, shear)
+│   │   ├── fatigue.py           # ✅ Marin factors, Modified Goodman, Basquin, Miner's rule
+│   │   └── buckling.py          # ✅ Euler buckling check (pin-pin, weak axis)
 │   ├── datagen/
 │   │   ├── sampling.py          # ✅ LHS + random sampler
 │   │   ├── stage1_kinematic.py  # ✅ Full Stage 1 (streaming iterator)
@@ -197,8 +220,6 @@ python3 -m venv .venv
 | 3 | `mass_properties.py:208` | Pin hole MOI offsets only exact for equal pin diameters | ✅ Fixed — `bugfix/physics_corrections` |
 | 4 | `stage2_embodiment.py` | No post-rounding uniqueness check — duplicates possible | ⚠️ Open |
 
-> `main` branch still has bugs 1–3. `bugfix/physics_corrections` is ready to merge.
-
 ---
 
 ## 6. To-Do list
@@ -206,47 +227,35 @@ python3 -m venv .venv
 > **For agents and contributors:** This is the full project backlog. It spans many sessions.
 > Complete one or two items per session — validate, commit, push, then stop.
 > Physics changes → **Physics Validator**. Signature changes → **Cross-Reference Auditor**. New data → **Data Quality Checker**.
+>
+> Academic schedule reference: Weeks 4–5 = dataset generation, Weeks 6–7 = ML training + validation, Week 8 = optimization + visualization.
 
-### High priority
-
-- [ ] **Merge `bugfix/physics_corrections` → `main`**
-- [ ] **Implement `stresses.py`** — σ = F/A + M·c/I (bending), τ = VQ/Ib at pin holes. Biggest blocker for real pass/fail. Read `instructions.md` §6–7 first. Run Physics Validator after.
-- [ ] **Wire stresses into `engine.py`** — replace `sigma, tau = 0.0, 0.0` placeholder. Run Physics Validator + Cross-Reference Auditor after.
-- [ ] **Wire stresses into `stage2_embodiment.py`** — fill the TODO stubs for mass props and stress. Run Cross-Reference Auditor after.
-
-### Medium priority
+### High priority (Weeks 4–5 — dataset generation)
 
 - [ ] **Implement `generate_dataset.py` CLI** — argparse + `generate.generate_dataset()` + write `all_cases.csv` / `train_pass.csv`. Run Data Quality Checker after.
+- [ ] **Generate large dataset** — run with `n_samples ≥ 10000`, save to `data/raw/`. Run ML Readiness Inspector before training.
 - [ ] **Fix post-rounding duplicates in Stage 2** — add seen-set check after rounding to prevent identical geometry rows.
 - [ ] **Fill `configs/generate/aggressive.yaml`** — wider ranges, higher n_samples (reference: `baseline.yaml`)
-- [ ] **Update `instructions.md` Known Bugs table** — bugs 1–3 are fixed; table still shows them as open.
+- [ ] **Populate `data/splits/`** — train/val/test split CSVs from the full dataset
 
-### ML pipeline (not started)
+### ML pipeline (Weeks 6–7)
 
 - [ ] **`ml/features.py`** — drop zero-variance columns (`rho`, `I_area_slider_*`), scale features, flag leakage columns (`utilization`, `sigma_max`, `tau_max`)
-- [ ] **`ml/models.py`** — binary classifier (Random Forest or XGBoost) for pass/fail + regressor for `utilization`. Use scikit-learn.
-- [ ] **`ml/train.py`** — load dataset, apply feature pipeline, fit, evaluate, save to `data/models/`
+- [ ] **`ml/models.py`** — binary classifier (Random Forest or XGBoost) for pass/fail + regressor for `utilization` (minimum safety factor proxy). Use scikit-learn.
+- [ ] **`ml/train.py`** — load dataset, apply feature pipeline, train/val/test split, hyperparameter tuning, evaluate with R², RMSE, and loss-vs-iteration; save to `data/models/`
 - [ ] **`ml/infer.py`** — load saved model, accept design dict, return prediction + confidence
 - [ ] **`train_model.py` CLI** — argparse wrapper around `ml/train.py`
 - [ ] **Fill `configs/train/classifier.yaml` and `regression.yaml`**
 
-### Physics — future work
+### Optimization and visualization (Week 8)
 
-- [ ] **`fatigue.py`** — Goodman/Miner's rule using `TotalCycles` and alternating/mean stress
-- [ ] **`buckling.py`** — Euler buckling check for connecting rod under compression
-- [ ] **`preview_stresses.py`** — like `preview_forces.py` but outputs σ/τ per angle (after `stresses.py` done)
-- [ ] **`optimize_config.py` CLI** — ML-based design space search; rank candidates by pass probability
-- [ ] **Fill `configs/optimize/search.yaml`**
+- [ ] **`optimize_config.py` CLI** — use trained ML model as surrogate to sweep design space; rank candidates by pass probability, minimize envelope and motor power. Cross-check top candidates against physics engine.
+- [ ] **Fill `configs/optimize/search.yaml`** — define search bounds and optimization objectives (minimize size/weight and required motor power)
+- [ ] **Sensitivity plots** — plot each input feature vs `utilization` / `pass_fail` to show which design parameters matter most
+- [ ] **Parameter correlation map** — heatmap of feature–target correlations across the full dataset
 
-### Data and testing
+### Physics and testing
 
-- [ ] **Generate large dataset** — once stresses done, run with `n_samples ≥ 10000`, save to `data/raw/`
-- [ ] **Run ML Readiness Inspector** before any training run
+- [ ] **`preview_stresses.py`** — like `preview_forces.py` but outputs σ/τ per angle
 - [ ] **Expand `test_datagen_units.py`** — add dynamics, mass properties, and stress tests
 - [ ] **Add regression tests** — fixed-seed full pipeline run vs reference snapshot
-- [ ] **Populate `data/splits/`** — train/val/test split CSVs from full dataset
-
-### Documentation
-
-- [ ] **Add stress formulas to `instructions.md`** once `stresses.py` is implemented
-- [ ] **Add pipeline architecture diagram** to `assets/`

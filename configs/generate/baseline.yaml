@@ -4,6 +4,15 @@ material:
   rho: {min: 7800, max: 7800}
   yield_stress: {min: 100e6, max: 100e6}
   yield_shear_stress: {min: 100e6, max: 100e6}
+  # 2024-T3 Aluminium mechanical properties for stress / fatigue / buckling analysis
+  # Mother Doc v7 Section 10.1 — all values in SI units (Pa, dimensionless)
+  E: 73.1e9             # Elastic modulus (Pa)
+  S_ut: 483e6           # Ultimate tensile strength (Pa)
+  S_y: 345e6            # Yield strength, 0.2% offset (Pa)
+  S_prime_e: 130e6      # Reference fatigue strength at 10^8 cycles (Pa)
+  sigma_f_prime: 807e6  # Fatigue strength coefficient ≈ 1.67 * S_ut (Pa)
+  G: 28e9               # Shear modulus (Pa)
+  nu: 0.33              # Poisson's ratio
 
 geometry:
   r: {min: 0.04, max: 0.15}        # crank radius (m)
@@ -43,6 +52,27 @@ sampling:
     - "r > 0"
     - "l > 0"
     - "e >= 0"
+
+stress_analysis:
+  # Diametral clearance: D_hole = D_pin + delta (m)
+  # 0.1 mm is a typical close-running fit for small pins.
+  delta: 1e-4                      # diametral clearance (m)
+
+  # Stress concentration factors (dimensionless)
+  # Kt_lug:          single-shear round-ended lug (Mother Doc Section 8.1)
+  # Kt_hole_torsion: peak torsional shear at pin hole (Peterson 4.9.1, conservative)
+  Kt_lug: 2.34
+  Kt_hole_torsion: 4.0
+
+  # Buckling target safety factor for machinery (Mother Doc Section 14.5)
+  n_buck_target: 3.0
+
+  # Basquin S-N curve second anchor point (cycles) — Mother Doc Eq 13.3
+  N_basquin_anchor: 2.0e6
+
+  # Reliability z-value for endurance limit correction (Mother Doc Section 10.2)
+  # z_a = 3.091 → 99.9% reliability; z_a = 2.326 → 99%; z_a = 1.282 → 90%
+  z_a_reliability: 3.091
 
 manufacturing:
   resolution_mm: 1.0              # r, l, e, widths, thicknesses rounded to nearest mm
