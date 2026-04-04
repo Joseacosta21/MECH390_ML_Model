@@ -151,14 +151,13 @@ MECH390_ML_Model/
 ├── instructions.md
 ├── configs/
 │   ├── generate/
-│   │   ├── baseline.yaml        # Main config (40 samples, LHS, 5 variants/2D)
+│   │   ├── baseline.yaml        # ✅ Main config (400 samples, LHS, 5 variants/2D)
 │   │   ├── test_small.yaml      # Fast test config
-│   │   └── aggressive.yaml      # 🔲 EMPTY
+│   │   └── aggressive.yaml      # 🔲 EMPTY — wider ranges for diverse training
 │   ├── train/
-│   │   ├── classifier.yaml      # 🔲 EMPTY
-│   │   └── regression.yaml      # 🔲 EMPTY
+│   │   └── surrogate.yaml       # ✅ Optuna sweep config (arch, dropout, lr, batch)
 │   └── optimize/
-│       └── search.yaml          # 🔲 EMPTY
+│       └── search.yaml          # ✅ Weight table + optimizer settings
 ├── src/mech390/
 │   ├── config.py                # ✅ Config loading, normalization, validation
 │   ├── physics/
@@ -173,13 +172,15 @@ MECH390_ML_Model/
 │   ├── datagen/
 │   │   ├── sampling.py          # ✅ LHS + random sampler
 │   │   ├── stage1_kinematic.py  # ✅ Full Stage 1 (streaming iterator)
-│   │   ├── stage2_embodiment.py # ✅ 3D expansion (stress calls are TODOs)
-│   │   └── generate.py          # ✅ Orchestrator with pass/fail labeling
+│   │   ├── stage2_embodiment.py # ✅ 3D expansion
+│   │   └── generate.py          # ✅ Orchestrator with pass/fail labeling (71 cols)
 │   └── ml/
-│       ├── features.py          # 🔲 EMPTY
-│       ├── models.py            # 🔲 EMPTY
-│       ├── train.py             # 🔲 EMPTY
-│       └── infer.py             # 🔲 EMPTY
+│       ├── __init__.py          # ✅ Package init
+│       ├── features.py          # ✅ Scaler, feature split, min_n_static, target stats
+│       ├── models.py            # ✅ CrankSliderSurrogate (ReLU trunk + clf + reg heads)
+│       ├── train.py             # ✅ Optuna sweep, early stopping, checkpoint save
+│       ├── infer.py             # ✅ SurrogatePredictor (dict / DataFrame inference)
+│       └── optimize.py          # ✅ Surrogate optimizer (differential_evolution, top-N)
 ├── scripts/
 │   ├── preview_stage1.py        # ✅ Stage 1 → CSV
 │   ├── preview_stage2.py        # ✅ Stage 1 + Stage 2 + mass props → CSV
@@ -187,8 +188,8 @@ MECH390_ML_Model/
 │   ├── debug_stage1.py          # ✅ Quick debug runner
 │   ├── test_datagen.py          # ✅ Inline generation test
 │   ├── generate_dataset.py      # ✅ Full pipeline CLI → 7 CSVs
-│   ├── train_model.py           # 🔲 STUB
-│   └── optimize_config.py       # 🔲 STUB
+│   ├── train_model.py           # ✅ Surrogate training CLI
+│   └── optimize_design.py       # ✅ Surrogate optimizer CLI
 ├── data/
 │   ├── preview/
 │   │   ├── stage1_geometries.csv  # 40 rows × 7 cols
@@ -261,17 +262,29 @@ No open bugs.
 
 ### ML pipeline (Weeks 6–7)
 
-- [ ] **`ml/features.py`** — drop zero-variance columns (`rho`, `I_area_slider_*`), scale features, flag leakage columns (`utilization`, `sigma_max`, `tau_max`)
-- [ ] **`ml/models.py`** — NN architecture (see ML Architecture section below)
-- [ ] **`ml/train.py`** — load dataset, apply feature pipeline, train/val/test split, hyperparameter tuning, evaluate; save to `data/models/`
-- [ ] **`ml/infer.py`** — load saved model, accept weight vector + constraints, return optimal geometry
-- [ ] **`train_model.py` CLI** — argparse wrapper around `ml/train.py`
-- [ ] **Fill `configs/train/classifier.yaml` and `regression.yaml`**
+- [x] **`ml/features.py`** — StandardScaler, feature/target split, `min_n_static` derived column, train/val/test stratified split, `compute_target_stats()` for score normalization
+- [x] **`ml/models.py`** — `CrankSliderSurrogate`: shared ReLU FC trunk + classification head (pass_fail, sigmoid+BCE) + regression head (7 targets, linear+MSE); `save/load_checkpoint`, `build_model_from_hparams`
+- [x] **`ml/train.py`** — Optuna hyperparameter sweep (50 trials × 300 epochs), early stopping, saves best checkpoint + scaler + target_stats to `data/models/`
+- [x] **`ml/infer.py`** — `SurrogatePredictor`: loads checkpoint + scaler, `predict()` accepts dict / list / DataFrame, returns pass_prob + all 7 regression targets
+- [x] **`ml/optimize.py`** — `run_optimization()`: reads geometry bounds from `baseline.yaml`, weighted score function with pass_prob penalty, `scipy differential_evolution`, returns top-N distinct candidates
+- [x] **`scripts/train_model.py`** — CLI: `python scripts/train_model.py --config configs/train/surrogate.yaml`
+- [x] **`scripts/optimize_design.py`** — CLI: `python scripts/optimize_design.py --generate-config ... --optimize-config ... --model ...`
+- [x] **`configs/train/surrogate.yaml`** — full Optuna sweep config (architecture options, dropout, lr, batch size, weight decay ranges)
+- [x] **`configs/optimize/search.yaml`** — user-editable weight table (objectives + directions + constraint on pass_prob); bounds auto-read from `baseline.yaml`
+
+### ML To-Do (surrogate optimizer)
+
+- [ ] **Run full training** — `python scripts/train_model.py --config configs/train/surrogate.yaml` (50 Optuna trials × up to 300 epochs). Smoke test used only 3 trials × 20 epochs — regression predictions are currently unreliable.
+- [ ] **Validate regression quality** — after full training, confirm val R² > 0.85 for `total_mass`, `volume_envelope`, `tau_A_max`; val F1 > 0.90 for `pass_fail`
+- [ ] **Cross-validate top-1 candidate** — run the best optimizer result through the full physics pipeline (`generate_dataset.py`) to confirm it physically passes all checks
+- [ ] **Tune weight table** — edit `configs/optimize/search.yaml` objectives/weights based on what design trade-offs are most important for the final prototype
+- [ ] **Fill `configs/generate/aggressive.yaml`** — wider geometry ranges + higher n_samples for a more diverse training set
+- [ ] **Retrain on aggressive dataset** — regenerate data with `aggressive.yaml`, retrain surrogate, compare val metrics
+- [ ] **Sensitivity plots** — plot each input feature vs `utilization` / `pass_fail` to visualize which design parameters matter most
+- [ ] **Parameter correlation map** — heatmap of feature–target correlations across the full dataset
 
 ### Optimization and visualization (Week 8)
 
-- [ ] **`optimize_config.py` CLI** — use trained ML model as surrogate to sweep design space; rank candidates by pass probability, minimize envelope and motor power. Cross-check top candidates against physics engine.
-- [ ] **Fill `configs/optimize/search.yaml`** — define search bounds and optimization objectives (minimize size/weight and required motor power)
 - [ ] **Sensitivity plots** — plot each input feature vs `utilization` / `pass_fail` to show which design parameters matter most
 - [ ] **Parameter correlation map** — heatmap of feature–target correlations across the full dataset
 

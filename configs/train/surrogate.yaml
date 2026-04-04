@@ -1,0 +1,76 @@
+# ---------------------------------------------------------------------------
+# Surrogate model training configuration
+# ---------------------------------------------------------------------------
+# This config controls: data paths, feature/target lists, architecture search
+# space, training hyperparameters, and Optuna sweep settings.
+# ---------------------------------------------------------------------------
+
+data:
+  csv_pass: data/raw/passed_configs.csv
+  csv_fail: data/raw/failed_configs.csv
+  train_frac:  0.70
+  val_frac:    0.15
+  # test_frac is inferred as 1 - train_frac - val_frac = 0.15
+  random_seed: 42
+
+features:
+  # 10 independent design variables fed into the NN as inputs
+  inputs:
+    - r
+    - l
+    - e
+    - width_r
+    - thickness_r
+    - width_l
+    - thickness_l
+    - pin_diameter_A
+    - pin_diameter_B
+    - pin_diameter_C
+  # Targets: pass_fail is the classification head; the rest are regression heads
+  classification_target: pass_fail
+  regression_targets:
+    - total_mass
+    - volume_envelope
+    - tau_A_max
+    - E_rev
+    - min_n_static      # derived: min(n_static_rod, n_static_crank, n_static_pin)
+    - utilization
+    - n_buck
+
+# ---------------------------------------------------------------------------
+# Hyperparameter search space (Optuna samples from these ranges)
+# ---------------------------------------------------------------------------
+model:
+  hidden_sizes_options:         # discrete architecture choices
+    - [64, 64]
+    - [128, 128]
+    - [256, 128]
+    - [256, 128, 64]
+    - [512, 256, 128]
+  dropout_range: [0.0, 0.3]     # uniform range
+  use_batch_norm: true          # fixed — always on
+
+training:
+  lr_range:           [1.0e-4, 1.0e-2]   # log-uniform
+  batch_size_options: [32, 64, 128, 256]  # categorical
+  weight_decay_range: [1.0e-5, 1.0e-3]   # log-uniform
+  max_epochs: 300
+  patience:   25                          # early stopping patience (val loss)
+
+optuna:
+  n_trials:  50
+  metric:    val_f1    # primary metric to maximise (classifier head)
+  direction: maximize
+
+# Loss weighting between classification (BCE) and regression (MSE) heads.
+# Increase bce_weight to prioritise pass/fail accuracy over regression quality.
+loss_weights:
+  bce: 1.0
+  mse: 0.5
+
+# Where to save the best checkpoint and scaler
+output:
+  model_dir:      data/models
+  checkpoint:     data/models/surrogate_best.pt
+  scaler:         data/models/scaler.pkl
+  target_stats:   data/models/target_stats.json
