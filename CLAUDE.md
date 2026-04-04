@@ -25,6 +25,7 @@ at Concordia University. CAD, prototyping, and the written report are handled ex
 - Optimal QRR recommendation to minimize crank torque and motor power
 - Design space exploration to minimize mechanism size and weight
 
+
 **Pipeline:**
 ```
 Config (YAML) → Stage 1: 2D Kinematic Synthesis → Stage 2: 3D Embodiment
@@ -139,13 +140,16 @@ ML-readiness after any data generation run.
    - `r`, `l`, `e` within the bounds in `configs/generate/baseline.yaml`
    - `ROM` within ±`ROM_tolerance` of the target (0.25 m)
    - `QRR` within [1.5, 2.5]
-   - `mass_crank`, `mass_rod`, `mass_slider` > 0
+   - `mass_crank`, `mass_rod`, `mass_slider` > 0; `total_mass` == sum of parts
    - `I_mass_*` > 0
-   - `sigma_max`, `tau_max` >= 0 (when stresses are implemented)
+   - `sigma_max`, `tau_max` >= 0
+   - `volume_envelope` > 0 (order of magnitude: 10⁻⁴ to 10⁻² m³)
+   - `tau_A_max` > 0; `F_A_max`, `F_B_max`, `F_C_max` > 0
+   - `n_static_rod`, `n_static_crank`, `n_static_pin` >= 1.0 in `passed_configs.csv`
 4. Checks dataset statistics:
    - Row count matches expected `n_samples × n_variants_per_2d`
    - No duplicate rows (exact or near-duplicate geometry)
-   - Column count matches expected schema
+   - Column count matches expected schema (71 columns in passed/failed_configs.csv as of latest run)
 5. Reports: total rows, pass/fail count per check, any suspicious rows with index
 
 ---

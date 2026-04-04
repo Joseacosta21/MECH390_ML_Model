@@ -213,6 +213,28 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         return {'valid_physics': False}
 
+    # --- Post-sweep: Motor torque, energy per revolution, peak joint forces,
+    #     and per-link peak normal stresses (used by generate.py for n_static) ---
+    tau_A_arr   = np.array([s['tau_A'] for s in dynamics_history], dtype=float)
+    delta_theta = 2.0 * np.pi / len(tau_A_arr)
+
+    tau_A_max = float(np.max(np.abs(tau_A_arr)))
+    E_rev     = float(np.sum(tau_A_arr) * delta_theta)   # [J] per revolution
+
+    F_A_max = float(np.max(np.hypot(
+        [s['F_Ax'] for s in dynamics_history],
+        [s['F_Ay'] for s in dynamics_history],
+    )))
+    F_B_max = float(np.max(np.hypot(
+        [s['F_Bx'] for s in dynamics_history],
+        [s['F_By'] for s in dynamics_history],
+    )))
+    F_C_max = float(np.max(np.abs([s['F_Cx'] for s in dynamics_history])))
+
+    sigma_rod_peak   = float(np.max(np.abs([s['sigma_rod']   for s in stresses_history])))
+    sigma_crank_peak = float(np.max(np.abs([s['sigma_crank'] for s in stresses_history])))
+    sigma_pin_peak   = float(np.max(np.abs([s['sigma_pin']   for s in stresses_history])))
+
     # --- Post-sweep: Buckling check (Section 14) ---
     buckling_result = buckling.evaluate(F_r_rod_hist, design)
 
@@ -235,6 +257,17 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
         'P_cr':              buckling_result['P_cr'],
         'N_max_comp':        buckling_result['N_max_comp'],
         'buckling_passed':   buckling_result['passed'],
+        # Motor torque & energy per revolution
+        'tau_A_max':         tau_A_max,
+        'E_rev':             E_rev,
+        # Peak joint forces (for bearing selection)
+        'F_A_max':           F_A_max,
+        'F_B_max':           F_B_max,
+        'F_C_max':           F_C_max,
+        # Per-link peak normal stresses (generate.py divides by sigma_limit → n_static)
+        'sigma_rod_peak':    sigma_rod_peak,
+        'sigma_crank_peak':  sigma_crank_peak,
+        'sigma_pin_peak':    sigma_pin_peak,
         # Per-angle histories for CSV export
         'kinematics_history': kinematics_history,
         'dynamics_history':   dynamics_history,
