@@ -183,7 +183,7 @@ class balance, feature distributions, potential leakage, and dataset size.
 
 ## Known Issues (Physics)
 
-No confirmed open bugs. If new bugs are found, document them here and in `instructions.md`.
+No open bugs.
 
 ---
 
@@ -191,6 +191,17 @@ No confirmed open bugs. If new bugs are found, document them here and in `instru
 
 You do not need to know Python or mechanics to use this project.
 Just describe what you want in plain English. Examples:
+
+**Run the full pipeline:**
+```bash
+.venv/bin/python scripts/generate_dataset.py \
+    --config  configs/generate/baseline.yaml \
+    --seed    42 \
+    --out-dir data/preview
+```
+Writes 7 CSVs to `data/preview/`: kinematics, dynamics, stresses, fatigue, buckling, passed_configs, failed_configs.
+
+**Plain English requests:**
 
 | What you say | What Claude will do |
 |---|---|
