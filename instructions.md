@@ -413,14 +413,23 @@ Configuration loading is responsible for numeric normalization (including scient
 - Currently only imports `dynamics`
 - Stress formulas not yet implemented
 
-#### `fatigue.py` 🔲 Empty
+#### `fatigue.py` ✅ Implemented
 
-- Reserved for future fatigue analysis
+- `evaluate(sigma_rod_hist, tau_rod_hist, sigma_crank_hist, tau_crank_hist, sigma_pin_hist, tau_pin_hist, design)` → per-component fatigue dict
+- Marin correction factors (k_a surface, k_b size, k_c load, k_d temp, k_e reliability, k_f misc)
+- Modified Goodman safety factor `n_f`, ECY safety factor `n_y`, governing `n = min(n_f, n_y)`
+- Basquin S-N curve, cycles to failure `N_f`, life in seconds `t_f`
+- Miner's rule cumulative damage `D`; `failed_miner = D >= 1.0`
+- All metrics returned with component suffix: `_rod`, `_crank`, `_pin`
 
-#### `engine.py` ✅ Implemented (stresses placeholder)
+#### `engine.py` ✅ Implemented
 
-- `evaluate_design(design)` → 15° sweep, calls kinematics → dynamics → stresses (0.0 placeholder)
-- Returns `sigma_max`, `tau_max`, `theta_sigma_max`, `theta_tau_max`, `valid_physics`
+- `evaluate_design(design)` → 15° sweep, calls kinematics → dynamics → stresses → buckling → fatigue
+- Returns summary keys: `sigma_max`, `tau_max`, `theta_sigma_max`, `theta_tau_max`, `valid_physics`, `n_buck`, `P_cr`, `N_max_comp`, `buckling_passed`, plus all fatigue keys
+- Also returns per-angle history lists for CSV export:
+  - `kinematics_history` — list of dicts (one per angle): `angle_deg`, `x_C`, `v_Cx`, `a_Cx`, `pos_Bx/By`, `vel_Bx/By`, `acc_Bx/By`, `phi_rad`, `omega_cb`, `alpha_cb`
+  - `dynamics_history`   — list of dicts: `angle_deg`, `F_Ax/Ay`, `F_Bx/By`, `F_Cx/Cy`, `N`, `F_f`, `tau_A`
+  - `stresses_history`   — list of dicts: `angle_deg`, `sigma_rod`, `tau_rod`, `sigma_crank`, `tau_crank`, `sigma_pin`, `tau_pin`, `sigma`, `tau`
 
 ---
 
@@ -453,10 +462,17 @@ Configuration loading is responsible for numeric normalization (including scient
 
 #### `generate.py` ✅ Implemented
 
-- `generate_dataset(config, seed)` → `DatasetResult(all_cases, pass_cases, summary)`
+- `generate_dataset(config, seed)` → `DatasetResult` with seven DataFrames:
+  `kinematics_df`, `dynamics_df`, `stresses_df`, `fatigue_df`, `buckling_df`, `passed_df`, `failed_df`
 - Streaming Stage-2 consumption via `iter_expand_to_3d`
-- Physics evaluation with fallback mock when engine unavailable
-- `_apply_limits` computes `utilization` and `pass_fail` from `sigma_allow`, `tau_allow`, `safety_factor`
+- Injects `omega`, `mu`, `g`, `alpha_r`, material props, and stress-analysis constants before engine call
+- `_compute_checks` evaluates 8 independent checks; a design passes only if ALL pass:
+  - Static: `utilization = max(sigma_max/sigma_allow, tau_max/tau_allow) <= 1.0`
+  - Buckling: `n_buck >= n_buck_target`
+  - Fatigue Goodman: `n_rod, n_crank, n_pin >= 1.0`
+  - Miner's rule: `D_rod, D_crank, D_pin < 1.0`
+- Designs with `valid_physics=False` or mass-property failures are silently dropped
+- All DataFrames are self-contained (geometry columns repeated on every row)
 
 ---
 
@@ -469,7 +485,7 @@ Configuration loading is responsible for numeric normalization (including scient
 | `preview_stage1.py` | ✅ Complete | CLI: runs Stage 1, streams to CSV. Args: `--config`, `--seed`, `--out-dir` |
 | `preview_stage2.py` | ✅ Complete | CLI: runs Stage 1 → Stage 2, computes mass properties, streams 27-column CSV. Args: `--config`, `--seed`, `--out-dir`, `--max-2d` |
 | `debug_stage1.py` | ✅ Complete | Quick debug runner using baseline config; prints first 5 designs + stats |
-| `generate_dataset.py` | 🔲 Stub | Imports only |
+| `generate_dataset.py` | ✅ Complete | CLI: full pipeline → 7 CSVs. Args: `--config`, `--seed`, `--out-dir` |
 | `train_model.py` | 🔲 Stub | Imports only |
 | `optimize_config.py` | 🔲 Stub | Imports only |
 
@@ -519,7 +535,7 @@ reports/
 
 1. Define or choose a generation config in `configs/generate/`
 2. Run Stage 1 preview: `python scripts/preview_stage1.py --config configs/generate/baseline.yaml`
-3. Run full dataset generation: `python scripts/generate_dataset.py` *(stub — implement CLI)*
+3. Run full dataset generation: `python scripts/generate_dataset.py --config configs/generate/baseline.yaml --out-dir data/preview`
 4. Inspect summary reports
 5. Train ML model: `python scripts/train_model.py` *(stub — implement CLI)*
 6. Use ML for rapid evaluation or optimization: `python scripts/optimize_config.py` *(stub)*
@@ -546,29 +562,25 @@ All steps are repeatable and configuration-driven.
 
 ## 13. Outstanding work (not yet implemented)
 
-### Known bugs (fix these first)
+### Known bugs
 
-| Bug | File | Fix |
+| Bug | File | Status |
 |---|---|---|
-| `omega` + mass props not injected before `engine.evaluate_design()` | `generate.py:144–150` | Compute mass props, merge into design dict, set `omega = RPM * 2π/60` before physics call |
-| Sign error on `alpha2` in `rod_angular_acceleration` | `kinematics.py:290` | Change `-alpha2 * r * cos(theta)` to `+alpha2 * r * cos(theta)` |
-| Hole offset approximation in `link_mass_moi_cg_z` | `mass_properties.py:208–209` | Use exact per-pin offsets from rectangle centroid instead of `±c/2` |
+| `omega` + mass props not injected before `engine.evaluate_design()` | `generate.py` | ✅ Fixed |
+| Sign error on `alpha2` in `rod_angular_acceleration` | `kinematics.py:290` | ✅ Fixed — `bugfix/physics_corrections` |
+| Hole offset approximation in `link_mass_moi_cg_z` | `mass_properties.py:208–209` | ✅ Fixed — `bugfix/physics_corrections` |
+| No post-rounding uniqueness check in Stage 2 | `stage2_embodiment.py` | ⚠️ Open |
 
 ### Unimplemented features
 
 | Item | Location | Notes |
 |---|---|---|
-| Stress formulas (normal + shear) | `stresses.py` | Required for real pass/fail labels |
-| Mass+stress calls in Stage 2 | `stage2_embodiment.py` | Marked as TODO stubs |
 | ML feature engineering | `ml/features.py` | Stub |
 | ML model definitions | `ml/models.py` | Stub |
 | ML training loop | `ml/train.py` | Stub |
 | ML inference | `ml/infer.py` | Stub |
-| `generate_dataset.py` CLI | `scripts/generate_dataset.py` | Stub — needs argparse + `generate_dataset()` call |
-| `preview_stage2.py` mass+stress | `scripts/preview_stage2.py` | Currently computes mass props; stress calls pending `stresses.py` |
 | `train_model.py` CLI | `scripts/train_model.py` | Stub |
 | `optimize_config.py` CLI | `scripts/optimize_config.py` | Stub |
-| Fatigue analysis | `fatigue.py` | Empty — future work |
 
 ---
 
