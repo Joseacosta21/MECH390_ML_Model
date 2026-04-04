@@ -46,7 +46,7 @@ operating:
 
 sampling:
   method: latin_hypercube          # latin_hypercube | random | grid
-  n_samples: 40              # ignored for grid
+  n_samples: 400             # ignored for grid
   n_variants_per_2d: 5
   constraints:
     - "r > 0"
