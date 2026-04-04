@@ -23,15 +23,15 @@ geometry:
     width: 0.02                    # slider width (m)
     height: 0.02                     # slider height (m)
   widths:
-    width_r: {min: 0.005, max: 0.02}
-    width_l: {min: 0.005, max: 0.02}
+    width_r: {min: 0.001, max: 0.012}    # 1–12 mm  (was 5–20 mm — too generous, near-zero failures)
+    width_l: {min: 0.001, max: 0.012}
   thicknesses:
-    thickness_r: {min: 0.005, max: 0.02}
-    thickness_l: {min: 0.005, max: 0.02}
+    thickness_r: {min: 0.001, max: 0.012}
+    thickness_l: {min: 0.001, max: 0.012}
   pin_diameters:
-    pin_diameter_A: {min: 0.002, max: 0.005}
-    pin_diameter_B: {min: 0.002, max: 0.005}
-    pin_diameter_C: {min: 0.002, max: 0.005}
+    pin_diameter_A: {min: 0.001, max: 0.004}  # 1–4 mm  (was 2–5 mm)
+    pin_diameter_B: {min: 0.001, max: 0.004}
+    pin_diameter_C: {min: 0.001, max: 0.004}
 
 
 operating:
@@ -46,7 +46,7 @@ operating:
 
 sampling:
   method: latin_hypercube          # latin_hypercube | random | grid
-  n_samples: 400             # ignored for grid
+  n_samples: 40              # ignored for grid
   n_variants_per_2d: 5
   constraints:
     - "r > 0"
