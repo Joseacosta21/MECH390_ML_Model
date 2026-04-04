@@ -176,14 +176,21 @@ MECH390_ML_Model/
 │   ├── preview_forces.py        # ✅ Full pipeline → force sweep (4800 rows)
 │   ├── debug_stage1.py          # ✅ Quick debug runner
 │   ├── test_datagen.py          # ✅ Inline generation test
-│   ├── generate_dataset.py      # 🔲 STUB
+│   ├── generate_dataset.py      # ✅ Full pipeline CLI → 7 CSVs
 │   ├── train_model.py           # 🔲 STUB
 │   └── optimize_config.py       # 🔲 STUB
 ├── data/
 │   ├── preview/
 │   │   ├── stage1_geometries.csv  # 40 rows × 7 cols
 │   │   ├── stage2_designs.csv     # 200 rows × 27 cols
-│   │   └── forces_sweep.csv       # 4800 rows × 15 cols (200 designs × 24 angles)
+│   │   ├── forces_sweep.csv       # 4800 rows × 15 cols (200 designs × 24 angles)
+│   │   ├── kinematics.csv         # 4800 rows — per (design, angle): positions, velocities, accels
+│   │   ├── dynamics.csv           # 4800 rows — per (design, angle): joint forces, torque
+│   │   ├── stresses.csv           # 4800 rows — per (design, angle): per-component σ, τ
+│   │   ├── fatigue.csv            # 200 rows  — per design: Goodman / Miner metrics
+│   │   ├── buckling.csv           # 200 rows  — per design: Euler buckling metrics
+│   │   ├── passed_configs.csv     # N rows    — passing designs with all check columns
+│   │   └── failed_configs.csv     # N rows    — failing designs with all check columns
 │   ├── raw/        # Full generation runs (not yet populated)
 │   ├── processed/
 │   ├── splits/
@@ -201,7 +208,17 @@ MECH390_ML_Model/
 python3 -m venv .venv
 .venv/bin/pip install pandas scipy numpy pyyaml
 
-# Preview scripts (all output to data/preview/ by default)
+# Full pipeline — generates all 7 CSVs (kinematics, dynamics, stresses,
+# fatigue, buckling, passed_configs, failed_configs) in data/preview/
+.venv/bin/python scripts/generate_dataset.py
+
+# With explicit config, seed, and output directory
+.venv/bin/python scripts/generate_dataset.py \
+    --config  configs/generate/baseline.yaml \
+    --seed    42 \
+    --out-dir data/preview
+
+# Preview scripts (individual pipeline stages)
 .venv/bin/python3 scripts/preview_stage1.py --out-dir data/preview
 .venv/bin/python3 scripts/preview_stage2.py --out-dir data/preview
 .venv/bin/python3 scripts/preview_forces.py --out-dir data/preview
@@ -213,12 +230,7 @@ python3 -m venv .venv
 
 ## 5. Known bugs
 
-| # | File | Issue | Status |
-|---|---|---|---|
-| 1 | `generate.py` | `omega` and mass properties not injected before physics eval | ✅ Fixed — `bugfix/physics_corrections` |
-| 2 | `kinematics.py:290` | Sign error on `alpha2` in rod angular acceleration | ✅ Fixed — `bugfix/physics_corrections` |
-| 3 | `mass_properties.py:208` | Pin hole MOI offsets only exact for equal pin diameters | ✅ Fixed — `bugfix/physics_corrections` |
-| 4 | `stage2_embodiment.py` | No post-rounding uniqueness check — duplicates possible | ⚠️ Open |
+No open bugs.
 
 ---
 
@@ -232,9 +244,8 @@ python3 -m venv .venv
 
 ### High priority (Weeks 4–5 — dataset generation)
 
-- [ ] **Implement `generate_dataset.py` CLI** — argparse + `generate.generate_dataset()` + write `all_cases.csv` / `train_pass.csv`. Run Data Quality Checker after.
-- [ ] **Generate large dataset** — run with `n_samples ≥ 10000`, save to `data/raw/`. Run ML Readiness Inspector before training.
-- [ ] **Fix post-rounding duplicates in Stage 2** — add seen-set check after rounding to prevent identical geometry rows.
+- [x] **`generate_dataset.py` CLI** — fully implemented; writes 7 CSVs to `data/preview/`. Pass/fail considers static stress, buckling, fatigue Goodman, and Miner's rule.
+- [x] **Fix post-rounding duplicates** — post-generation dedup pass on geometry columns; duplicate design_ids removed from all 7 DataFrames before CSV write. Count reported in summary.
 - [ ] **Fill `configs/generate/aggressive.yaml`** — wider ranges, higher n_samples (reference: `baseline.yaml`)
 - [ ] **Populate `data/splits/`** — train/val/test split CSVs from the full dataset
 
