@@ -360,6 +360,27 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
                 n_dropped += 1
                 continue
 
+        # --- Derived design metrics (geometry + mass, computed once) ---
+        design_eval['total_mass'] = (
+            design_eval.get('mass_crank',  0.0)
+            + design_eval.get('mass_rod',   0.0)
+            + design_eval.get('mass_slider', 0.0)
+        )
+        _slider_cfg = config.get('geometry', {}).get('slider', {})
+        _s_h = float(_slider_cfg.get('height', 0.02))   # slider block height (z) [m]
+        _s_l = float(_slider_cfg.get('length', 0.02))   # slider block length (x) [m]
+        _r   = float(design_eval['r'])
+        _l   = float(design_eval['l'])
+        _e   = float(design_eval['e'])
+        _tr  = float(design_eval.get('thickness_r',    0.0))
+        _tl  = float(design_eval.get('thickness_l',    0.0))
+        _pA  = float(design_eval.get('pin_diameter_A', 0.0))
+        # Bounding-box dimensions (see plan for derivation)
+        _T = _pA + _tr + (_tl + _s_h) / 2.0
+        _H = _r + min(_r, _e + _s_h / 2.0)
+        _L = _r + float(np.sqrt(max((_r + _l)**2 - _e**2, 0.0))) + _s_l / 2.0
+        design_eval['volume_envelope'] = _T * _H * _L
+
         # --- Inject material + stress-analysis constants ---
         design_eval.update(_mat)
         design_eval.update(_sa)
@@ -426,6 +447,21 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
             **geom,
             **checks,
         }
+
+        # --- Additional ML features (not part of pass/fail logic) ---
+        config_row['total_mass']      = design_eval.get('total_mass')
+        config_row['volume_envelope'] = design_eval.get('volume_envelope')
+        config_row['tau_A_max']       = metrics.get('tau_A_max')
+        config_row['E_rev']           = metrics.get('E_rev')
+        config_row['F_A_max']         = metrics.get('F_A_max')
+        config_row['F_B_max']         = metrics.get('F_B_max')
+        config_row['F_C_max']         = metrics.get('F_C_max')
+        _s_rod   = metrics.get('sigma_rod_peak',   0.0) or 0.0
+        _s_crank = metrics.get('sigma_crank_peak', 0.0) or 0.0
+        _s_pin   = metrics.get('sigma_pin_peak',   0.0) or 0.0
+        config_row['n_static_rod']   = sigma_limit / _s_rod   if _s_rod   > 0 else float('inf')
+        config_row['n_static_crank'] = sigma_limit / _s_crank if _s_crank > 0 else float('inf')
+        config_row['n_static_pin']   = sigma_limit / _s_pin   if _s_pin   > 0 else float('inf')
 
         if checks['pass_fail'] == 1:
             pass_rows.append(config_row)

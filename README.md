@@ -56,6 +56,7 @@ Physics generates the data. ML learns pass/fail patterns from it. No ML shortcut
 - Minimize mechanism envelope (size and weight)
 - Minimize required motor power while satisfying all design targets
 
+
 > CAD modeling, 3D-printed prototype, and the written report are handled outside this repository.
 
 ---
@@ -94,18 +95,21 @@ configs/generate/baseline.yaml
 │  Stress + Fatigue +     │  stresses.py, fatigue.py, buckling.py
 │  Buckling Evaluation    │  σ, τ per angle; Goodman/Miner; Euler buckling
 └──────────┬──────────────┘
-           │ sigma_max, tau_max
+           │ sigma_max, tau_max + tau_A_max, E_rev, F_A/B/C_max, σ_peak per link
            ▼
 ┌─────────────────────────┐
 │  Pass / Fail Label      │  generate.py
-│                         │  utilization = max(σ/σ_allow, τ/τ_allow)
-│                         │  pass_fail = 1 if utilization ≤ 1.0
+│  + ML Feature Assembly  │  utilization, n_buck, fatigue FOSs
+│                         │  total_mass, volume_envelope
+│                         │  tau_A_max, E_rev, F_A/B/C_max
+│                         │  n_static_rod/crank/pin
 └──────────┬──────────────┘
-           │ labeled dataset
+           │ labeled dataset (71 cols)
            ▼
 ┌─────────────────────────┐
-│  ML Training            │  ml/  ← ALL STUBS
-│                         │  Classifier / regressor on pass/fail
+│  ML Training            │  ml/  ← STUBS (architecture decided)
+│  PyTorch multi-task NN  │  ReLU trunk + classification & regression heads
+│  Optuna hyperpar. sweep │  Inputs: 10 design vars → pass_fail + 4 targets
 └─────────────────────────┘
 ```
 
@@ -129,6 +133,12 @@ configs/generate/baseline.yaml
 | `F_A`, `F_B`, `F_C` | Joint reaction vectors [Fx, Fy] | N |
 | `N`, `F_f`, `tau_A` | Slider normal, friction, drive torque | N, N, N·m |
 | `sigma_max`, `tau_max` | Peak normal/shear stress over cycle | Pa |
+| `n_static_rod/crank/pin` | Static FOS per link: σ_allow / peak σ_link | — |
+| `total_mass` | mass_crank + mass_rod + mass_slider | kg |
+| `volume_envelope` | Bounding-box volume of assembled mechanism (T × H × L) | m³ |
+| `tau_A_max` | Peak motor torque over full cycle | N·m |
+| `E_rev` | Energy per revolution ∫τ dθ (discrete sum × 2π/24) | J |
+| `F_A_max`, `F_B_max`, `F_C_max` | Peak resultant force at each pin over cycle | N |
 | `pass_fail` | 1 = pass, 0 = fail | — |
 
 ---
@@ -252,9 +262,9 @@ No open bugs.
 ### ML pipeline (Weeks 6–7)
 
 - [ ] **`ml/features.py`** — drop zero-variance columns (`rho`, `I_area_slider_*`), scale features, flag leakage columns (`utilization`, `sigma_max`, `tau_max`)
-- [ ] **`ml/models.py`** — binary classifier (Random Forest or XGBoost) for pass/fail + regressor for `utilization` (minimum safety factor proxy). Use scikit-learn.
-- [ ] **`ml/train.py`** — load dataset, apply feature pipeline, train/val/test split, hyperparameter tuning, evaluate with R², RMSE, and loss-vs-iteration; save to `data/models/`
-- [ ] **`ml/infer.py`** — load saved model, accept design dict, return prediction + confidence
+- [ ] **`ml/models.py`** — NN architecture (see ML Architecture section below)
+- [ ] **`ml/train.py`** — load dataset, apply feature pipeline, train/val/test split, hyperparameter tuning, evaluate; save to `data/models/`
+- [ ] **`ml/infer.py`** — load saved model, accept weight vector + constraints, return optimal geometry
 - [ ] **`train_model.py` CLI** — argparse wrapper around `ml/train.py`
 - [ ] **Fill `configs/train/classifier.yaml` and `regression.yaml`**
 
