@@ -51,7 +51,7 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
             'pin_diameter_A/B/C'                   — pin diameters (m)
             'I_area_crank_yy/zz', 'I_area_rod_yy/zz' — area moments (m^4)
             'I_mass_crank_cg_z', 'I_mass_rod_cg_z'   — mass MOI (kg*m^2)
-            'E', 'S_ut', 'S_y', 'S_prime_e',
+            'E', 'S_ut', 'S_y', 'Sn',
             'sigma_f_prime', 'n_rpm', 'total_cycles'  — material / fatigue props
 
     Returns:

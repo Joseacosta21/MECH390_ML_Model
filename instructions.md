@@ -415,7 +415,7 @@ Configuration loading is responsible for numeric normalization (including scient
 #### `fatigue.py` ✅ Implemented
 
 - `evaluate(sigma_rod_hist, tau_rod_hist, sigma_crank_hist, tau_crank_hist, sigma_pin_hist, tau_pin_hist, design)` → per-component fatigue dict
-- Marin correction factors (k_a surface, k_b size, k_c load, k_d temp, k_e reliability, k_f misc)
+- Fatigue correction factors using `S'n = Sn * C_s * C_st * C_R * C_m * C_f` (temperature factor removed)
 - Modified Goodman safety factor `n_f`, ECY safety factor `n_y`, governing `n = min(n_f, n_y)`
 - Basquin S-N curve, cycles to failure `N_f`, life in seconds `t_f`
 - Miner's rule cumulative damage `D`; `failed_miner = D >= 1.0`
