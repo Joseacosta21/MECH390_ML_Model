@@ -10,7 +10,7 @@ material:
   E: 73.1e9             # Elastic modulus (Pa)
   S_ut: 483e6           # Ultimate tensile strength (Pa)
   S_y: 345e6            # Yield strength, 0.2% offset (Pa)
-  S_prime_e: 130e6      # Reference fatigue strength at 10^8 cycles (Pa)
+  Sn: 130e6             # Uncorrected fatigue strength at 10^8 cycles (Pa)
   sigma_f_prime: 807e6  # Fatigue strength coefficient ≈ 1.67 * S_ut (Pa)
   G: 28e9               # Shear modulus (Pa)
   nu: 0.33              # Poisson's ratio
@@ -71,9 +71,12 @@ stress_analysis:
   # Basquin S-N curve second anchor point (cycles) — Mother Doc Eq 13.3
   N_basquin_anchor: 2.0e6
 
-  # Reliability z-value for endurance limit correction (Mother Doc Section 10.2)
-  # z_a = 3.091 → 99.9% reliability; z_a = 2.326 → 99%; z_a = 1.282 → 90%
-  z_a_reliability: 3.091
+  # Fatigue strength correction factors:
+  # S'n = Sn * C_s(size+surface) * C_st * C_R * C_m * C_f
+  C_st: 1.0
+  C_R: 0.81
+  C_f: 1.0
+  C_m: 1.0
 
 manufacturing:
   resolution_mm: 1.0              # r, l, e, widths, thicknesses rounded to nearest mm
@@ -83,4 +86,3 @@ limits:
   sigma_allow: 180e6               # Pa
   tau_allow: 100e6                 # Pa
   safety_factor: 1.0
-

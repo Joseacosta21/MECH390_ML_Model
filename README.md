@@ -287,6 +287,7 @@ No open bugs.
 
 ### Physics and testing
 
+- [ ] **Size factor formula check** — verify `C_s` implementation against selected reference equation/range
 - [ ] **`preview_stresses.py`** — like `preview_forces.py` but outputs σ/τ per angle
 - [ ] **Expand `test_datagen_units.py`** — add dynamics, mass properties, and stress tests
 - [ ] **Add regression tests** — fixed-seed full pipeline run vs reference snapshot

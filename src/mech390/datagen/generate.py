@@ -133,7 +133,7 @@ def _compute_checks(
     for comp in ('rod', 'crank', 'pin'):
         n = metrics.get(f'n_{comp}', float('inf'))
         checks[f'n_{comp}']                   = n
-        checks[f'S_e_{comp}']                 = metrics.get(f'S_e_{comp}',       float('nan'))
+        checks[f'S_n_prime_{comp}']           = metrics.get(f'S_n_prime_{comp}', float('nan'))
         checks[f'sigma_a_eq_{comp}']          = metrics.get(f'sigma_a_eq_{comp}', float('nan'))
         checks[f'sigma_m_eq_{comp}']          = metrics.get(f'sigma_m_eq_{comp}', float('nan'))
         checks[f'n_f_{comp}']                 = metrics.get(f'n_f_{comp}',        float('nan'))
@@ -309,7 +309,7 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
         'E':             float(get_or_warn(material, 'E',             73.1e9, context=_ctx)),
         'S_ut':          float(get_or_warn(material, 'S_ut',          483e6,  context=_ctx)),
         'S_y':           float(get_or_warn(material, 'S_y',           345e6,  context=_ctx)),
-        'S_prime_e':     float(get_or_warn(material, 'S_prime_e',     130e6,  context=_ctx)),
+        'Sn':            float(get_or_warn(material, 'Sn',            get_or_warn(material, 'S_prime_e', 130e6, context=_ctx), context=_ctx)),
         'sigma_f_prime': float(get_or_warn(material, 'sigma_f_prime', 807e6,  context=_ctx)),
     }
 
@@ -320,7 +320,10 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
         'Kt_hole_torsion':  float(get_or_warn(sa_cfg, 'Kt_hole_torsion',  4.0,    context=_ctx)),
         'n_buck_target':    n_buck_target,
         'N_basquin_anchor': float(get_or_warn(sa_cfg, 'N_basquin_anchor', 2.0e6,  context=_ctx)),
-        'z_a_reliability':  float(get_or_warn(sa_cfg, 'z_a_reliability',  3.091,  context=_ctx)),
+        'C_st':             float(get_or_warn(sa_cfg, 'C_st',            1.0,    context=_ctx)),
+        'C_R':              float(get_or_warn(sa_cfg, 'C_R',             0.81,   context=_ctx)),
+        'C_f':              float(get_or_warn(sa_cfg, 'C_f',             1.0,    context=_ctx)),
+        'C_m':              float(get_or_warn(sa_cfg, 'C_m',             1.0,    context=_ctx)),
         # Crank angular acceleration — 0.0 for constant RPM (per instructions.md)
         'alpha_r':          0.0,
     }
@@ -422,7 +425,7 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
         for comp in ('rod', 'crank', 'pin'):
             for key in ('sigma_max', 'sigma_min', 'sigma_m', 'sigma_a',
                         'tau_m', 'tau_a', 'R', 'sigma_a_eq', 'sigma_m_eq',
-                        'S_e', 'n_f', 'n_y', 'n', 'b_B', 'N_f', 't_f',
+                        'S_n_prime', 'n_f', 'n_y', 'n', 'b_B', 'N_f', 't_f',
                         'D', 'failed_miner'):
                 fat_row[f'{key}_{comp}'] = metrics.get(f'{key}_{comp}')
         fat_rows.append(fat_row)
