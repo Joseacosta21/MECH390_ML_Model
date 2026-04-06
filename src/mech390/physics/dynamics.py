@@ -43,16 +43,23 @@ def solve_joint_reactions_newton_euler(
     g: float = 9.81,
     alpha_r: float = 0.0,
     v_eps: float = 1e-9,
+    m_block: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Solve the planar Newton-Euler joint-reaction system at one crank angle.
 
     Unknown vector:
         [F_Ax, F_Ay, F_Bx, F_By, F_Cx, F_Cy, N, tau_A]
+
+    m_block: mass of the payload block sitting on the slider (kg).
+        Volumeless — adds to slider inertia (eq 7) and weight (eq 8) only.
+        N is solved by the system, so increased weight automatically raises
+        friction via mu*N without any extra terms.
     """
     m_r = float(mass_crank)
     m_l = float(mass_rod)
     m_s = float(mass_slider)
+    m_eff = m_s + float(m_block)   # effective slider + block mass
     i_r = float(I_crank)
     i_l = float(I_rod)
     mu_val = float(mu)
@@ -127,15 +134,16 @@ def solve_joint_reactions_newton_euler(
     A[5, f_cy] = _cross_z(r_C_Gl, ey)
     b[5] = i_l * alpha_l
 
-    # 7) Slider Fx: -F_Cx - mu*s*N = m_s * a_Gsx
+    # 7) Slider Fx: -F_Cx - mu*s*N = m_eff * a_Gsx
     A[6, f_cx] = -1.0
     A[6, n_idx] = -mu_val * s
-    b[6] = m_s * a_Gs[0]
+    b[6] = m_eff * a_Gs[0]
 
-    # 8) Slider Fy: -F_Cy + N = m_s * a_Gsy + m_s * g
+    # 8) Slider Fy: -F_Cy + N = m_eff * a_Gsy + m_eff * g
+    #    Larger m_eff → larger N → larger friction in eq 7 (coupled automatically).
     A[7, f_cy] = -1.0
     A[7, n_idx] = 1.0
-    b[7] = m_s * a_Gs[1] + m_s * grav
+    b[7] = m_eff * a_Gs[1] + m_eff * grav
 
     cond_number = float(np.linalg.cond(A))
     if not np.isfinite(cond_number) or cond_number > _COND_LIMIT:
@@ -207,4 +215,5 @@ def joint_reaction_forces(
         g=float(kwargs.get("g", 9.81)),
         alpha_r=float(kwargs.get("alpha_r", 0.0)),
         v_eps=float(kwargs.get("v_eps", 1e-9)),
+        m_block=float(kwargs.get("m_block", 0.0)),
     )

@@ -295,6 +295,7 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
     omega         = rpm * 2.0 * np.pi / 60.0
     mu_default    = float(get_or_warn(operating,  'mu',           0.0,   context=_ctx))
     g_default     = float(get_or_warn(operating,  'g',            9.81,  context=_ctx))
+    m_block       = float(get_or_warn(operating,  'P',            0.0,   context=_ctx))
     sigma_allow   = float(get_or_warn(limits_cfg, 'sigma_allow',  1e20,  context=_ctx))
     tau_allow     = float(get_or_warn(limits_cfg, 'tau_allow',    1e20,  context=_ctx))
     safety_factor = float(get_or_warn(limits_cfg, 'safety_factor', 1.0,  context=_ctx))
@@ -347,7 +348,8 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
 
         # --- Compute mass properties ---
         design_eval = design.copy()
-        design_eval['omega'] = omega
+        design_eval['omega']   = omega
+        design_eval['m_block'] = m_block
         design_eval.setdefault('mu', mu_default)
         design_eval.setdefault('g',  g_default)
 

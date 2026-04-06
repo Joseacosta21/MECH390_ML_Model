@@ -243,8 +243,8 @@ Eight equations are assembled from:
 4. Rod Fx balance
 5. Rod Fy balance (+ gravity term)
 6. Rod moment about G_l
-7. Slider Fx balance (includes kinetic Coulomb friction: `−mu·sign(v_sx)·N`)
-8. Slider Fy balance (+ N as slider guide reaction)
+7. Slider Fx balance: `−F_Cx − mu·sign(v_sx)·N = (m_s + m_block)·a_Gsx`
+8. Slider Fy balance: `−F_Cy + N = (m_s + m_block)·(a_Gsy + g)` — larger m_block → larger N → larger friction in eq 7 (coupled automatically)
 
 Condition number of the system matrix is checked against a limit of `1e12`. Ill-conditioned solves raise `ValueError`.
 
@@ -340,14 +340,13 @@ Do not put physics logic here — use `instructions.md` for that.
 ```
 configs/
 ├─ generate/
-│  ├─ baseline.yaml     # Full-scale run: 20M samples, LHS, 5 variants/2D
-│  ├─ test_small.yaml   # Test run: 1000 samples, LHS, 5 variants/2D
-│  └─ aggressive.yaml   # Wide-range generation config
+│  ├─ baseline.yaml     # Main run: 40 samples, LHS, 5 variants/2D → 200 designs
+│  ├─ test_small.yaml   # Fast test config
+│  └─ aggressive.yaml   # 🔲 EMPTY — wider ranges (not yet populated)
 ├─ train/
-│  ├─ regression.yaml
-│  └─ classifier.yaml
+│  └─ surrogate.yaml    # Optuna sweep config (arch, dropout, lr, batch)
 └─ optimize/
-   └─ search.yaml
+   └─ search.yaml       # Weight table + optimizer settings
 ```
 
 Each config file:
@@ -486,8 +485,8 @@ Configuration loading is responsible for numeric normalization (including scient
 | `preview_stage2.py` | ✅ Complete | CLI: runs Stage 1 → Stage 2, computes mass properties, streams 27-column CSV. Args: `--config`, `--seed`, `--out-dir`, `--max-2d` |
 | `debug_stage1.py` | ✅ Complete | Quick debug runner using baseline config; prints first 5 designs + stats |
 | `generate_dataset.py` | ✅ Complete | CLI: full pipeline → 7 CSVs. Args: `--config`, `--seed`, `--out-dir` |
-| `train_model.py` | 🔲 Stub | Imports only |
-| `optimize_config.py` | 🔲 Stub | Imports only |
+| `train_model.py` | ✅ Complete | CLI: Optuna sweep → saves checkpoint + scaler to `data/models/` |
+| `optimize_design.py` | ✅ Complete | CLI: surrogate optimizer → top-N candidates via differential evolution |
 
 ---
 
@@ -497,10 +496,8 @@ Configuration loading is responsible for numeric normalization (including scient
 
 ```
 data/
-├─ stage1_preview/
-│  └─ stage1_geometries.csv   # Output of preview_stage1.py
-├─ raw/
-│  └─ <run_id>/
+├─ preview/    # All outputs: preview_*.py scripts + generate_dataset.py (default)
+├─ runs/       # Named production runs: --out-dir data/runs/<name>
 ├─ processed/
 ├─ models/
 └─ splits/
@@ -575,12 +572,10 @@ All steps are repeatable and configuration-driven.
 
 | Item | Location | Notes |
 |---|---|---|
-| ML feature engineering | `ml/features.py` | Stub |
-| ML model definitions | `ml/models.py` | Stub |
-| ML training loop | `ml/train.py` | Stub |
-| ML inference | `ml/infer.py` | Stub |
-| `train_model.py` CLI | `scripts/train_model.py` | Stub |
-| `optimize_config.py` CLI | `scripts/optimize_config.py` | Stub |
+| Full surrogate training run | `scripts/train_model.py` | Smoke-tested only (3 trials × 20 epochs); needs 50 × 300 |
+| Regression quality validation | — | Target: val R² > 0.85, F1 > 0.90 |
+| Sensitivity / correlation plots | — | Week 8 deliverable |
+| `configs/generate/aggressive.yaml` | `configs/generate/` | Empty — wider ranges not yet defined |
 
 ---
 

@@ -81,9 +81,10 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
     mass_slider = get_or_warn(design, 'mass_slider', 1.0, context=_ctx)
     i_crank     = get_or_warn(design, 'I_mass_crank_cg_z', 1.0, context=_ctx)
     i_rod       = get_or_warn(design, 'I_mass_rod_cg_z',   1.0, context=_ctx)
-    mu          = get_or_warn(design, 'mu',    0.0,  context=_ctx)
-    g           = get_or_warn(design, 'g',    9.81,  context=_ctx)
-    alpha_r     = get_or_warn(design, 'alpha_r', 0.0, context=_ctx)
+    mu          = get_or_warn(design, 'mu',      0.0,  context=_ctx)
+    g           = get_or_warn(design, 'g',       9.81, context=_ctx)
+    alpha_r     = get_or_warn(design, 'alpha_r', 0.0,  context=_ctx)
+    m_block     = get_or_warn(design, 'm_block', 0.0,  context=_ctx)
 
     # 15-degree sweep over one full revolution
     thetas = np.deg2rad(np.arange(0, 360, 15))
@@ -149,6 +150,7 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
                 mu=mu,
                 g=g,
                 alpha_r=alpha_r,
+                m_block=m_block,
             )
             F_A = forces['F_A']
             F_B = forces['F_B']
