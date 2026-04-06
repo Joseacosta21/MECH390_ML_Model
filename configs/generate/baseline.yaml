@@ -1,9 +1,10 @@
 random_seed: 42
 
 material:
-  rho: {min: 7800, max: 7800}
-  yield_stress: {min: 100e6, max: 100e6}
-  yield_shear_stress: {min: 100e6, max: 100e6}
+  # Material: Aluminum (per project description)
+  rho: {min: 2780, max: 2780}
+  yield_stress: {min: 345e6, max: 345e6}
+  yield_shear_stress: {min: 199e6, max: 199e6}
   # 2024-T3 Aluminium mechanical properties for stress / fatigue / buckling analysis
   # Mother Doc v7 Section 10.1 — all values in SI units (Pa, dimensionless)
   E: 73.1e9             # Elastic modulus (Pa)
@@ -36,8 +37,8 @@ geometry:
 
 operating:
   RPM: 30
-  P: 0.5                          # process load placeholder (currently unused)
-  mu: 0.2                         # coefficient of friction
+  P: 0.5                          # slider block mass (kg) — injected into dynamics as m_block
+  mu: 0.47                        # coefficient of friction — dry machined Al–Al (Shigley's Table 8-2)
   g: 9.81                         # gravitational acceleration (m/s²)
   ROM: 0.25                       # range of motion (m)
   ROM_tolerance: 0.0005           # ±0.5 mm
@@ -78,15 +79,8 @@ manufacturing:
   resolution_mm: 1.0              # r, l, e, widths, thicknesses rounded to nearest mm
   pin_resolution_mm: 0.1          # pin diameters rounded to nearest 0.1 mm
 
-sweep:
-  theta_step_deg: 15               # fixed sweep step
-
 limits:
   sigma_allow: 180e6               # Pa
   tau_allow: 100e6                 # Pa
   safety_factor: 1.0
 
-output:
-  csv_all: "all_cases.csv"
-  csv_pass: "train_pass.csv"
-  store_theta_at_max: true

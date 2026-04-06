@@ -15,7 +15,7 @@
 | `CLAUDE.md` | Agent definitions and mandatory rules — read before anything else |
 | `instructions.md` | Authoritative physics derivations and full technical spec |
 | `configs/generate/baseline.yaml` | Controls geometry ranges, sampling, and pass/fail limits |
-| `data/preview/` | Three validated CSVs — quick sanity check of the pipeline |
+| `data/preview/` | All pipeline and preview-script outputs (default output directory) |
 
 **Making requests (plain English works):**
 
@@ -44,8 +44,9 @@ Physics generates the data. ML learns pass/fail patterns from it. No ML shortcut
 | Range of motion (ROM target) | 250 mm ± 0.5 mm |
 | Input speed | 30 RPM |
 | Quick return ratio (QRR) | 1.5 – 2.5 |
-| Link material | Aluminum |
+| Link material | Al 2024-T3 (ρ=2780 kg/m³, E=73.1 GPa, S_ut=483 MPa, S_y=345 MPa) |
 | Link geometry | Rectangular cross-section |
+| Slider–guide friction (μ) | 0.47 — dry machined Al–Al (Shigley's) |
 
 **What the ML model must predict:**
 - Pass/fail classification for a given design configuration
@@ -151,7 +152,7 @@ MECH390_ML_Model/
 ├── instructions.md
 ├── configs/
 │   ├── generate/
-│   │   ├── baseline.yaml        # ✅ Main config (400 samples, LHS, 5 variants/2D)
+│   │   ├── baseline.yaml        # ✅ Main config (40 samples, LHS, 5 variants/2D)
 │   │   ├── test_small.yaml      # Fast test config
 │   │   └── aggressive.yaml      # 🔲 EMPTY — wider ranges for diverse training
 │   ├── train/
@@ -191,18 +192,18 @@ MECH390_ML_Model/
 │   ├── train_model.py           # ✅ Surrogate training CLI
 │   └── optimize_design.py       # ✅ Surrogate optimizer CLI
 ├── data/
-│   ├── preview/
-│   │   ├── stage1_geometries.csv  # 40 rows × 7 cols
-│   │   ├── stage2_designs.csv     # 200 rows × 27 cols
-│   │   ├── forces_sweep.csv       # 4800 rows × 15 cols (200 designs × 24 angles)
-│   │   ├── kinematics.csv         # 4800 rows — per (design, angle): positions, velocities, accels
-│   │   ├── dynamics.csv           # 4800 rows — per (design, angle): joint forces, torque
-│   │   ├── stresses.csv           # 4800 rows — per (design, angle): per-component σ, τ
-│   │   ├── fatigue.csv            # 200 rows  — per design: Goodman / Miner metrics
-│   │   ├── buckling.csv           # 200 rows  — per design: Euler buckling metrics
-│   │   ├── passed_configs.csv     # N rows    — passing designs with all check columns
-│   │   └── failed_configs.csv     # N rows    — failing designs with all check columns
-│   ├── raw/        # Full generation runs (not yet populated)
+│   ├── preview/                     # All quick-run outputs (preview_*.py + generate_dataset.py default)
+│   │   ├── stage1_geometries.csv    # 40 rows × 7 cols
+│   │   ├── stage2_designs.csv       # 200 rows × 27 cols
+│   │   ├── forces_sweep.csv         # 4800 rows × 15 cols (200 designs × 24 angles)
+│   │   ├── kinematics.csv           # 4800 rows — per (design, angle): positions, velocities, accels
+│   │   ├── dynamics.csv             # 4800 rows — per (design, angle): joint forces, torque
+│   │   ├── stresses.csv             # 4800 rows — per (design, angle): per-component σ, τ
+│   │   ├── fatigue.csv              # 200 rows  — per design: Goodman / Miner metrics
+│   │   ├── buckling.csv             # 200 rows  — per design: Euler buckling metrics
+│   │   ├── passed_configs.csv       # N rows    — passing designs with all check columns
+│   │   └── failed_configs.csv       # N rows    — failing designs with all check columns
+│   ├── runs/       # Named production runs: --out-dir data/runs/<name>
 │   ├── processed/
 │   ├── splits/
 │   └── models/
@@ -276,17 +277,13 @@ No open bugs.
 
 - [ ] **Run full training** — `python scripts/train_model.py --config configs/train/surrogate.yaml` (50 Optuna trials × up to 300 epochs). Smoke test used only 3 trials × 20 epochs — regression predictions are currently unreliable.
 - [ ] **Validate regression quality** — after full training, confirm val R² > 0.85 for `total_mass`, `volume_envelope`, `tau_A_max`; val F1 > 0.90 for `pass_fail`
-- [ ] **Cross-validate top-1 candidate** — run the best optimizer result through the full physics pipeline (`generate_dataset.py`) to confirm it physically passes all checks
-- [ ] **Tune weight table** — edit `configs/optimize/search.yaml` objectives/weights based on what design trade-offs are most important for the final prototype
-- [ ] **Fill `configs/generate/aggressive.yaml`** — wider geometry ranges + higher n_samples for a more diverse training set
-- [ ] **Retrain on aggressive dataset** — regenerate data with `aggressive.yaml`, retrain surrogate, compare val metrics
-- [ ] **Sensitivity plots** — plot each input feature vs `utilization` / `pass_fail` to visualize which design parameters matter most
-- [ ] **Parameter correlation map** — heatmap of feature–target correlations across the full dataset
+- [ ] **Cross-validate top-1 candidate** — run the best optimizer result through the full physics pipeline to confirm it physically passes all checks
+- [ ] **Tune weight table** — edit `configs/optimize/search.yaml` objectives/weights based on design trade-offs for the final prototype
 
 ### Optimization and visualization (Week 8)
 
-- [ ] **Sensitivity plots** — plot each input feature vs `utilization` / `pass_fail` to show which design parameters matter most
-- [ ] **Parameter correlation map** — heatmap of feature–target correlations across the full dataset
+- [ ] **Sensitivity plots** — plot each input feature vs `utilization` / `pass_fail`
+- [ ] **Parameter correlation map** — heatmap of feature–target correlations
 
 ### Physics and testing
 
