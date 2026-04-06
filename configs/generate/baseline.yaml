@@ -24,11 +24,11 @@ geometry:
     width: 0.02                    # slider width (m)
     height: 0.02                     # slider height (m)
   widths:
-    width_r: {min: 0.001, max: 0.012}    # 1–12 mm  (was 5–20 mm — too generous, near-zero failures)
-    width_l: {min: 0.001, max: 0.012}
+    width_r: {min: 0.001, max: 0.009}    # 1–9 mm  (tuned for ~50% pass rate with crank fatigue boundary)
+    width_l: {min: 0.001, max: 0.009}
   thicknesses:
-    thickness_r: {min: 0.001, max: 0.012}
-    thickness_l: {min: 0.001, max: 0.012}
+    thickness_r: {min: 0.001, max: 0.009}
+    thickness_l: {min: 0.001, max: 0.009}
   pin_diameters:
     pin_diameter_A: {min: 0.001, max: 0.004}  # 1–4 mm  (was 2–5 mm)
     pin_diameter_B: {min: 0.001, max: 0.004}
