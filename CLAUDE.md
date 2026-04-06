@@ -13,11 +13,14 @@ It is the data generation and ML component of the MECH 390 Winter 2026 design pr
 at Concordia University. CAD, prototyping, and the written report are handled externally.
 
 **Design specifications (fixed — not design variables):**
-- Reaction force (slider load): 500 g 
+- Reaction force (slider load): 500 g
 - Range of motion: 250 mm ± 0.5 mm
 - Input speed: 30 RPM
-- Quick return ratio (QRR): 1.5 – 2.5
-- Link material: Aluminum, rectangular cross-section
+- Quick return ratio (QRR): 1.5 – 2.5 (dataset currently reaches ~2.06 max)
+- Link material: Al 2024-T3 — ρ=2780 kg/m³, E=73.1 GPa, S_ut=483 MPa, S_y=345 MPa
+- Link geometry: rectangular cross-section; widths/thicknesses 1–12 mm, pins 1–4 mm
+- Slider–guide friction μ=0.47 (dry machined Al–Al, Shigley's)
+- Dataset: n=40 samples × 5 variants = 200 designs (professor-imposed limit; negotiated from 20)
 
 **What the ML model must deliver (Weeks 6–8):**
 - Pass/fail classification for design configurations
