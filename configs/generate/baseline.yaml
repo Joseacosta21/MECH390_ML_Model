@@ -1,17 +1,15 @@
 random_seed: 42
 
 material:
-  # Material: Aluminum (per project description)
-  rho: {min: 2780, max: 2780}
-  yield_stress: {min: 345e6, max: 345e6}
-  yield_shear_stress: {min: 199e6, max: 199e6}
-  # 2024-T3 Aluminium mechanical properties for stress / fatigue / buckling analysis
-  # Mother Doc v7 Section 10.1 — all values in SI units (Pa, dimensionless)
+  # Material: Al 2024-T3 — all values in SI units (Pa, dimensionless)
+  rho: {min: 2780, max: 2780}  # density (kg/m³)
   E: 73.1e9             # Elastic modulus (Pa)
   S_ut: 483e6           # Ultimate tensile strength (Pa)
-  S_y: 345e6            # Yield strength, 0.2% offset (Pa)
-  Sn: 130e6             # Uncorrected fatigue strength at 10^8 cycles (Pa)
-  sigma_f_prime: 807e6  # Fatigue strength coefficient ≈ 1.67 * S_ut (Pa)
+  S_y: 345e6            # Yield strength, 0.2% offset (Pa); also used as static stress limit
+  # Fatigue strength at design life (18,720,000 cycles), fully reversed (R=-1).
+  # Source: ASM data for Al 2024-T3 at 5×10^8 cycles → 138 MPa; interpolated to
+  # 18.72×10^6 cycles using Basquin S-N curve → 133 MPa. Conservative choice.
+  Sn: 133e6             # Fatigue strength at design life (18,720,000 cycles) (Pa)
   G: 28e9               # Shear modulus (Pa)
   nu: 0.33              # Poisson's ratio
 
@@ -68,21 +66,42 @@ stress_analysis:
   # Buckling target safety factor for machinery (Mother Doc Section 14.5)
   n_buck_target: 3.0
 
-  # Basquin S-N curve second anchor point (cycles) — Mother Doc Eq 13.3
-  N_basquin_anchor: 2.0e6
+  # Basquin S-N constants — AA2024-T3 experimental, fully reversed (R=-1)
+  # Anchors: (10^7 cycles, 230 MPa) and (10^9 cycles, 155 MPa)
+  # b = log10(155/230) / log10(1e9/1e7) = -0.086
+  # A = 230 / (1e7)^(-0.086) = 924 MPa
+  # Valid range: 10^5 to 10^9 cycles
+  basquin_A: 924e6              # Basquin intercept A (Pa)
+  basquin_b: -0.086             # Basquin slope b (dimensionless)
 
-  # Fatigue strength correction factors:
-  # S'n = Sn * C_s(size+surface) * C_st * C_R * C_m * C_f
-  C_st: 1.0
-  C_R: 0.81
-  C_f: 1.0
-  C_m: 1.0
+  # Fatigue strength correction factors (Mott Ch. 5):
+  # S'n = Sn * C_sur * C_s * C_st * C_R * C_m * C_f
+  # C_sur: manufacturing / surface condition factor (Mott Table 5-4)
+  #        as-machined, Al 2024-T3, S_ut=483 MPa → 4.51*483^(-0.265) ≈ 0.88
+  # C_s:   size factor — computed from equivalent diameter in fatigue.py (Mott Table 5-3)
+  C_sur: 0.88           # manufacturing method factor: as-machined (Mott Table 5-4)
+  C_st: 1.0             # stress type / load factor
+  C_R: 0.81             # reliability factor (≈ 99%, Mott Table 5-3)
+  C_f: 1.0              # miscellaneous / environment factor
+  C_m: 1.0              # material factor (wrought Al, no special treatment)
 
 manufacturing:
   resolution_mm: 1.0              # r, l, e, widths, thicknesses rounded to nearest mm
   pin_resolution_mm: 0.1          # pin diameters rounded to nearest 0.1 mm
 
 limits:
-  sigma_allow: 180e6               # Pa
-  tau_allow: 100e6                 # Pa
-  safety_factor: 1.0
+  safety_factor: 1.0               # de-rating divisor applied to material yield limits. This applies to static.
+  utilization_max: 1.0             # utilization = max(sigma_max/sigma_limit, tau_max/tau_limit)
+  n_static_min: 1.0                # shared minimum static FoS (used as fallback for per-component values)
+  n_static_rod_min: 1.0            # minimum static FoS — rod
+  n_static_crank_min: 1.0          # minimum static FoS — crank
+  n_static_pin_min: 1.0            # minimum static FoS — pin
+  n_fatigue_min: 1.0               # shared minimum fatigue FoS (used as fallback for per-component values)
+  n_fatigue_rod_min: 1.0           # minimum fatigue governing FoS (rod)
+  n_fatigue_crank_min: 1.0         # minimum fatigue governing FoS (crank)
+  n_fatigue_pin_min: 1.0           # minimum fatigue governing FoS (pin)
+  n_buck_min: 3.0                  # minimum Euler buckling FoS
+  D_miner_max: 1.0                 # shared Miner damage limit (used as fallback for per-component values)
+  D_miner_rod_max: 1.0             # Miner damage limit — rod
+  D_miner_crank_max: 1.0           # Miner damage limit — crank
+  D_miner_pin_max: 1.0             # Miner damage limit — pin

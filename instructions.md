@@ -155,9 +155,9 @@ Operations:
    - `N`, `F_f` (slider normal + kinetic Coulomb friction)
    - `tau_A` (required crank torque)
    - compatibility alias `F_O = F_A`
-6. Compute stresses *(not yet implemented in `stresses.py`; engine uses 0.0 placeholder)*
+6. Compute stresses via `stresses.py` (axial, bending, torsion, shear at body and hole locations for rod, crank, and pin)
 7. Track maximum stress values over the full crank cycle
-8. Apply pass/fail criteria using `sigma_allow`, `tau_allow`, and `safety_factor`
+8. Apply pass/fail criteria using `sigma_limit = S_y / safety_factor` and `tau_limit = 0.577 * S_y / safety_factor` (Von Mises shear yield)
 
 ---
 
@@ -309,7 +309,8 @@ Each dataset row MUST include:
 
 - `sigma_max` (maximum normal stress over cycle)
 - `tau_max` (maximum shear stress over cycle)
-- `utilization = max(sigma_max/σ_allow, tau_max/τ_allow)`
+- `utilization = max(sigma_max/sigma_limit, tau_max/tau_limit)`, where
+  `sigma_limit = S_y / safety_factor` and `tau_limit = 0.577 * S_y / safety_factor` (Von Mises shear yield)
 - `pass_fail` (binary: 1 = pass, 0 = fail)
 - optional: `theta_sigma_max`, `theta_tau_max` (crank angle at which maxima occur)
 
@@ -407,18 +408,27 @@ Configuration loading is responsible for numeric normalization (including scient
 - `MassPropertiesResult` frozen dataclass with `.to_dict()` (includes legacy aliases)
 - `compute_design_mass_properties(design, config)` → flat dict aggregator
 
-#### `stresses.py` 🔲 Stub
+#### `stresses.py` ✅ Implemented
 
-- Currently only imports `dynamics`
-- Stress formulas not yet implemented
+- `rod_stresses(theta, design, dynamics_result)` → dict of per-angle rod σ and τ components
+- `crank_stresses(theta, design, dynamics_result)` → dict of per-angle crank σ and τ components
+- `pin_stresses(theta, design, dynamics_result)` → dict of per-angle pin σ and τ
+- Saint-Venant torsion: `τ = T / (β·b·c²)` where `b = max(w,t)`, `c = min(w,t)` (Roark/Shigley)
+- Axial hole stress: `σ = Kt_lug · F / ((w − D_hole) · t)` with `D_hole = D_pin + delta`
+- Known issue: `max(w − D_hole, 1e-9)` fallback produces unphysical stress magnitudes (~TPa) when pin nearly fills the link width; affected rows are correctly labeled as failures
 
 #### `fatigue.py` ✅ Implemented
 
 - `evaluate(sigma_rod_hist, tau_rod_hist, sigma_crank_hist, tau_crank_hist, sigma_pin_hist, tau_pin_hist, design)` → per-component fatigue dict
-- Fatigue correction factors using `S'n = Sn * C_s * C_st * C_R * C_m * C_f` (temperature factor removed)
+- Fatigue correction factors using `S'n = Sn * C_sur * C_s * C_st * C_R * C_m * C_f` (Mott Ch. 5)
+  - `C_sur` = manufacturing method factor (as-machined = 0.88, from config `stress_analysis.C_sur`)
+  - `C_s` = size factor computed from equivalent diameter (Mott Table 5-3)
+  - `Sn` = 133 MPa — fatigue strength at design life 18.72×10⁶ cycles (Al 2024-T3, ASM)
 - Modified Goodman safety factor `n_f`, ECY safety factor `n_y`, governing `n = min(n_f, n_y)`
-- Basquin S-N curve, cycles to failure `N_f`, life in seconds `t_f`
-- Miner's rule cumulative damage `D`; `failed_miner = D >= 1.0`
+- Basquin S-N (Miner's rule): `σa = A · N^b`, A = 924 MPa, b = −0.086
+  - Source: AA2024-T3 experimental anchors (10⁷ cycles, 230 MPa) and (10⁹ cycles, 155 MPa)
+  - `N_f = (σa_eq / A)^(1/b)`; valid range 10⁵–10⁹ cycles
+- Miner's rule cumulative damage `D = N_design / N_f`; `failed_miner = D >= 1.0`
 - All metrics returned with component suffix: `_rod`, `_crank`, `_pin`
 
 #### `engine.py` ✅ Implemented
@@ -457,7 +467,7 @@ Configuration loading is responsible for numeric normalization (including scient
 - Rounding applied BEFORE constraint check: widths/thicknesses to `resolution_mm`, pin diameters to `pin_resolution_mm`
 - `_round_to_res(value, resolution_m)` — same noise-free implementation as Stage 1
 - Seed diversification: `design_seed = base_seed + design_idx * 9973`
-- Mass properties and stress calls marked as TODO stubs
+- Mass properties computed via `compute_design_mass_properties`; injected into design dict before engine call
 
 #### `generate.py` ✅ Implemented
 
@@ -465,11 +475,13 @@ Configuration loading is responsible for numeric normalization (including scient
   `kinematics_df`, `dynamics_df`, `stresses_df`, `fatigue_df`, `buckling_df`, `passed_df`, `failed_df`
 - Streaming Stage-2 consumption via `iter_expand_to_3d`
 - Injects `omega`, `mu`, `g`, `alpha_r`, material props, and stress-analysis constants before engine call
-- `_compute_checks` evaluates 8 independent checks; a design passes only if ALL pass:
-  - Static: `utilization = max(sigma_max/sigma_allow, tau_max/tau_allow) <= 1.0`
-  - Buckling: `n_buck >= n_buck_target`
-  - Fatigue Goodman: `n_rod, n_crank, n_pin >= 1.0`
-  - Miner's rule: `D_rod, D_crank, D_pin < 1.0`
+- `_compute_checks` evaluates configured pass/fail checks; a design passes only if ALL pass:
+  - Static: `utilization = max(sigma_max/sigma_limit, tau_max/tau_limit) <= utilization_max`,
+    where `sigma_limit = yield_stress/safety_factor` and `tau_limit = yield_shear_stress/safety_factor`
+  - Static FoS: `n_static_rod/crank/pin >= n_static_*_min`
+  - Buckling: `n_buck >= n_buck_min`
+  - Fatigue Goodman: `n_rod, n_crank, n_pin >= n_fatigue_*_min`
+  - Miner's rule: `D_rod, D_crank, D_pin < D_miner_*_max`
 - Designs with `valid_physics=False` or mass-property failures are silently dropped
 - All DataFrames are self-contained (geometry columns repeated on every row)
 
@@ -483,10 +495,12 @@ Configuration loading is responsible for numeric normalization (including scient
 |---|---|---|
 | `preview_stage1.py` | ✅ Complete | CLI: runs Stage 1, streams to CSV. Args: `--config`, `--seed`, `--out-dir` |
 | `preview_stage2.py` | ✅ Complete | CLI: runs Stage 1 → Stage 2, computes mass properties, streams 27-column CSV. Args: `--config`, `--seed`, `--out-dir`, `--max-2d` |
+| `preview_forces.py` | ✅ Complete | CLI: full pipeline → per-angle force sweep CSV (4800 rows). Args: `--config`, `--seed`, `--out-dir`, `--max-2d` |
 | `debug_stage1.py` | ✅ Complete | Quick debug runner using baseline config; prints first 5 designs + stats |
 | `generate_dataset.py` | ✅ Complete | CLI: full pipeline → 7 CSVs. Args: `--config`, `--seed`, `--out-dir` |
 | `train_model.py` | ✅ Complete | CLI: Optuna sweep → saves checkpoint + scaler to `data/models/` |
 | `optimize_design.py` | ✅ Complete | CLI: surrogate optimizer → top-N candidates via differential evolution |
+| `visualize_design.py` | 🔲 Planned | CLI: 2D mechanism drawing from `design_id`. Args: `--csv`, `--id`, `--angle`. ~130 lines |
 
 ---
 
@@ -534,8 +548,8 @@ reports/
 2. Run Stage 1 preview: `python scripts/preview_stage1.py --config configs/generate/baseline.yaml`
 3. Run full dataset generation: `python scripts/generate_dataset.py --config configs/generate/baseline.yaml --out-dir data/preview`
 4. Inspect summary reports
-5. Train ML model: `python scripts/train_model.py` *(stub — implement CLI)*
-6. Use ML for rapid evaluation or optimization: `python scripts/optimize_config.py` *(stub)*
+5. Train ML model: `python scripts/train_model.py --config configs/train/surrogate.yaml`
+6. Use ML for rapid evaluation or optimization: `python scripts/optimize_design.py --generate-config configs/generate/baseline.yaml --optimize-config configs/optimize/search.yaml --model data/models/<checkpoint>`
 
 All steps are repeatable and configuration-driven.
 
@@ -566,7 +580,9 @@ All steps are repeatable and configuration-driven.
 | `omega` + mass props not injected before `engine.evaluate_design()` | `generate.py` | ✅ Fixed |
 | Sign error on `alpha2` in `rod_angular_acceleration` | `kinematics.py:290` | ✅ Fixed — `bugfix/physics_corrections` |
 | Hole offset approximation in `link_mass_moi_cg_z` | `mass_properties.py:208–209` | ✅ Fixed — `bugfix/physics_corrections` |
+| Rod torsion denominator used `β·w²·t` instead of `β·b·c²`; torsion not sorted for `t > w` | `stresses.py:235–241, 372–380` | ✅ Fixed |
 | No post-rounding uniqueness check in Stage 2 | `stage2_embodiment.py` | ⚠️ Open |
+| Net-section fallback `1e-9` produces ~TPa stresses when pin diameter ≥ link width | `stresses.py:218, 256, 358, 399` | ⚠️ Open — labels correct; fix: reject in Stage 2 |
 
 ### Unimplemented features
 
@@ -576,6 +592,7 @@ All steps are repeatable and configuration-driven.
 | Regression quality validation | — | Target: val R² > 0.85, F1 > 0.90 |
 | Sensitivity / correlation plots | — | Week 8 deliverable |
 | `configs/generate/aggressive.yaml` | `configs/generate/` | Empty — wider ranges not yet defined |
+| 2D mechanism visualizer | `scripts/visualize_design.py` | CLI: `--csv`, `--id`, `--angle`; draws crank/rod/slider with cross-sections, pin circles, guide rail; annotates pass/fail + key metrics; ~130 lines |
 
 ---
 

@@ -243,7 +243,7 @@ def rod_angular_velocity(theta: float, omega: float, r: float, l: float, e: floa
     Derived from the condition that the slider moves purely horizontally
     (V_{Cy}=0) and using
 
-        V_B = [omega * r * sin(theta), omega * r * cos(theta)]
+        V_B = [-r * omega * sin(theta), r * omega * cos(theta)]
 
     so
 

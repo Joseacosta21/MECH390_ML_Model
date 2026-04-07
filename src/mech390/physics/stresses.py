@@ -229,16 +229,20 @@ def _rod_stresses(
     # --- Torsion (Mother Doc Sections 5.5 / 5.6) ---
     # T_rod = F_t,rod,C * i_offset  (Eq 5.6)
     T_rod = abs(F_t_C) * i_offset
-    beta_r = _beta_torsion(w, t)
+    # Saint-Venant: tau_max = T / (beta * b * c^2), b >= c (Shigley's/Roark Table 10.7)
+    # Sort so b is always the longer dimension — either w or t depending on design.
+    b_r = max(w, t)
+    c_r = min(w, t)
+    beta_r = _beta_torsion(b_r, c_r)
 
-    # tau_T,rod body (Eq 5.8): T_rod / (beta_r * w_rod^2 * t_rod)
-    tau_T_rod_body = T_rod / (beta_r * w**2 * t)
+    # tau_T,rod body (Eq 5.8)
+    tau_T_rod_body = T_rod / (beta_r * b_r * c_r**2)
 
     # tau_nom,hole at Pin B and C (Eq 5.9)
     hole_factor_B = max(1.0 - math.pi * D_B_hole**2 / (4.0 * w * t), 0.01)
     hole_factor_C = max(1.0 - math.pi * D_C_hole**2 / (4.0 * w * t), 0.01)
-    tau_nom_hole_B = T_rod / (beta_r * w**2 * t * hole_factor_B)
-    tau_nom_hole_C = T_rod / (beta_r * w**2 * t * hole_factor_C)
+    tau_nom_hole_B = T_rod / (beta_r * b_r * c_r**2 * hole_factor_B)
+    tau_nom_hole_C = T_rod / (beta_r * b_r * c_r**2 * hole_factor_C)
 
     # Peak hole torsional shear — Kt_hole_torsion (Peterson 4.9.1, conservative)
     tau_max_hole_B = Kt_hole * tau_nom_hole_B
@@ -363,21 +367,25 @@ def _crank_stresses(
     # --- Torsion (Mother Doc Sections 6.6 and 6.7) ---
     # T_offset = F_t,crank,B * i_offset  (Eq 6.16)
     T_offset = abs(F_t_crank_B) * i_offset
-    beta_c = _beta_torsion(w, t)
+    # Saint-Venant: tau_max = T / (beta * b * c^2), b >= c (Shigley's/Roark Table 10.7)
+    # Sort so b is always the longer dimension — either w or t depending on design.
+    b_c = max(w, t)
+    c_c = min(w, t)
+    beta_c = _beta_torsion(b_c, c_c)
 
-    # tau_T,in = T_in / (beta_c * w_crank * t_crank^2)  (Eq 6.15)
-    tau_T_in = abs(T_in) / (beta_c * w * t**2)
+    # tau_T,in = T_in / (beta_c * b * c^2)  (Eq 6.15)
+    tau_T_in = abs(T_in) / (beta_c * b_c * c_c**2)
 
-    # tau_T,offset = T_offset / (beta_c * w_crank * t_crank^2)  (Eq 6.17)
-    tau_T_offset = T_offset / (beta_c * w * t**2)
+    # tau_T,offset = T_offset / (beta_c * b * c^2)  (Eq 6.17)
+    tau_T_offset = T_offset / (beta_c * b_c * c_c**2)
 
     # Combined torsional shear at holes (Eq 6.18 / 6.19)
     # T_total = T_in + T_offset (same crank axis, same denominator)
     T_total = abs(T_in) + T_offset
     hole_factor_B = max(1.0 - math.pi * D_B_hole**2 / (4.0 * w * t), 0.01)
     hole_factor_A = max(1.0 - math.pi * D_A_hole**2 / (4.0 * w * t), 0.01)
-    tau_nom_hole_B = T_total / (beta_c * w * t**2 * hole_factor_B)
-    tau_nom_hole_A = T_total / (beta_c * w * t**2 * hole_factor_A)
+    tau_nom_hole_B = T_total / (beta_c * b_c * c_c**2 * hole_factor_B)
+    tau_nom_hole_A = T_total / (beta_c * b_c * c_c**2 * hole_factor_A)
 
     # Peak hole torsional shear — Kt_hole_torsion (Peterson 4.9.1, conservative)
     tau_max_hole_B = Kt_hole * tau_nom_hole_B
