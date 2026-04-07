@@ -57,6 +57,11 @@ stress_analysis:
   # 0.1 mm is a typical close-running fit for small pins.
   delta: 1e-4                      # diametral clearance (m)
 
+  # Minimum wall thickness on each side of a pin hole (m).
+  # Net-section constraint: width > D_pin + delta + 2 * min_wall
+  # At 0.5 mm per side, a 2 mm pin in a 4 mm link leaves 1.0 mm net section.
+  min_wall_mm: 0.5e-3              # 0.5 mm (m)
+
   # Stress concentration factors (dimensionless)
   # Kt_lug:          single-shear round-ended lug (Mother Doc Section 8.1)
   # Kt_hole_torsion: peak torsional shear at pin hole (Peterson 4.9.1, conservative)

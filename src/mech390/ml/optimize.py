@@ -77,19 +77,33 @@ def _extract_bounds(gen_cfg: Dict[str, Any]) -> List[Tuple[float, float]]:
 # ---------------------------------------------------------------------------
 
 def _build_score_fn(
-    model:        torch.nn.Module,
+    model:           torch.nn.Module,
     scaler,
-    target_stats: Dict[str, Dict[str, float]],
-    objectives:   Dict[str, Dict[str, Any]],
-    pass_threshold: float,
-    penalty:      float = 10.0,
-    device:       torch.device = torch.device('cpu'),
+    target_stats:    Dict[str, Dict[str, float]],
+    objectives:      Dict[str, Dict[str, Any]],
+    pass_threshold:  float,
+    min_net_section: float,
+    penalty:         float = 10.0,
+    device:          torch.device = torch.device('cpu'),
 ):
     """
     Returns a callable f(x) → -score  (negative because scipy minimises).
 
     x : 1-D numpy array of length 10 (raw geometry values, un-normalised)
+
+    Two hard constraints applied as penalties:
+    1. pass_prob >= pass_threshold  (surrogate classification gate)
+    2. width - D_pin > min_net_section for every pin (prevents degenerate
+       near-zero net sections that produce ~TPa stresses in the physics engine)
     """
+    # Indices of width/pin pairs in _GEO_KEYS that must satisfy the net-section constraint:
+    # (width_idx, pin_idx) matching the four physical constraints
+    _NET_PAIRS = [
+        (_GEO_KEYS.index('width_r'), _GEO_KEYS.index('pin_diameter_A')),
+        (_GEO_KEYS.index('width_r'), _GEO_KEYS.index('pin_diameter_B')),
+        (_GEO_KEYS.index('width_l'), _GEO_KEYS.index('pin_diameter_B')),
+        (_GEO_KEYS.index('width_l'), _GEO_KEYS.index('pin_diameter_C')),
+    ]
     model.eval()
 
     def _score(x: np.ndarray) -> float:
@@ -100,7 +114,11 @@ def _build_score_fn(
             logit, pred_reg = model(x_t)
             pass_prob = float(torch.sigmoid(logit).item())
 
-        reg_vals = pred_reg.cpu().numpy().ravel()  # shape (7,)
+        # Model outputs are normalised [0,1] — denormalise to physical units
+        # before the score function applies its own normalisation step.
+        reg_vals = F.denormalize_targets(
+            pred_reg.cpu().numpy(), target_stats
+        ).ravel()  # shape (7,) in physical units
 
         score = 0.0
         for obj_name, obj_cfg in objectives.items():
@@ -120,9 +138,16 @@ def _build_score_fn(
             else:
                 score += weight * norm            # higher raw → higher contribution
 
-        # Hard constraint via penalty
+        # Hard constraint 1: pass probability gate
         if pass_prob < pass_threshold:
             score -= penalty * (pass_threshold - pass_prob)
+
+        # Hard constraint 2: net-section feasibility
+        # Penalise any geometry where width - D_pin <= min_net_section
+        for w_idx, p_idx in _NET_PAIRS:
+            violation = min_net_section - (x[w_idx] - x[p_idx])
+            if violation > 0:
+                score -= penalty * violation * 1e3   # scale to metres → significant penalty
 
         return -score   # scipy minimises, we want to maximise score
 
@@ -179,8 +204,15 @@ def run_optimization(
     maxiter        = int(opt_cfg['optimizer']['maxiter'])
     popsize        = int(opt_cfg['optimizer']['popsize'])
 
+    # Net-section constraint: width - D_pin > delta + 2 * min_wall
+    stress_cfg      = gen_cfg.get('stress_analysis', {})
+    delta_m         = float(stress_cfg.get('delta',       1e-4))
+    min_wall_m      = float(stress_cfg.get('min_wall_mm', 0.5e-3))
+    min_net_section = delta_m + 2.0 * min_wall_m
+
     score_fn = _build_score_fn(
-        model, scaler, target_stats, objectives, pass_threshold, device=device
+        model, scaler, target_stats, objectives, pass_threshold,
+        min_net_section=min_net_section, device=device,
     )
 
     logger.info("Running differential_evolution over %d-D space …", len(bounds))
@@ -220,7 +252,10 @@ def run_optimization(
         with torch.no_grad():
             logit, pred_reg = model(x_t)
             pass_prob = float(torch.sigmoid(logit).item())
-        reg_vals = pred_reg.cpu().numpy().ravel()
+        # Denormalise to physical units for result display
+        reg_vals = F.denormalize_targets(
+            pred_reg.cpu().numpy(), target_stats
+        ).ravel()
         s = -score_fn(x)   # convert back to positive score
 
         row = {k: float(v) for k, v in zip(_GEO_KEYS, x)}

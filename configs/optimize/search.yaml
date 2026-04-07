@@ -20,16 +20,20 @@
 
 objectives:
   total_mass:
-    weight:    0.35
+    weight:    0.30
     direction: minimize       # lighter mechanism → cheaper to 3D print
 
   volume_envelope:
-    weight:    0.30
+    weight:    0.25
     direction: minimize       # smaller footprint → easier to fit/mount
 
   tau_A_max:
-    weight:    0.20
+    weight:    0.15
     direction: minimize       # lower peak torque → smaller / cheaper motor
+
+  E_rev:
+    weight:    0.15
+    direction: minimize       # lower energy per revolution → more efficient motor selection
 
   min_n_static:
     weight:    0.15

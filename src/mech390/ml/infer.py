@@ -23,6 +23,7 @@ Usage
     print(result['pass_prob'], result['total_mass'])
 """
 
+import json
 from typing import Any, Dict, List, Union
 
 import numpy as np
@@ -43,13 +44,21 @@ class SurrogatePredictor:
         device:      'cpu' or 'cuda' (default 'cpu')
     """
 
-    def __init__(self, checkpoint: str, scaler_path: str, device: str = 'cpu'):
+    def __init__(
+        self,
+        checkpoint:  str,
+        scaler_path: str,
+        stats_path:  str = 'data/models/target_stats.json',
+        device:      str = 'cpu',
+    ):
         self.device = torch.device(device)
         ckpt        = load_checkpoint(checkpoint, device=device)
         self.model  = build_model_from_hparams(ckpt['hparams'])
         self.model.load_state_dict(ckpt['model_state_dict'])
         self.model.eval()
         self.scaler = F.load_scaler(scaler_path)
+        with open(stats_path) as fh:
+            self.target_stats = json.load(fh)
 
     def predict(
         self,
@@ -88,7 +97,10 @@ class SurrogatePredictor:
             logit, pred_reg = self.model(x_t)
             pass_probs = torch.sigmoid(logit).cpu().numpy().ravel()
 
-        reg_vals = pred_reg.cpu().numpy()  # (N, 7)
+        # Model outputs are normalised [0,1] — denormalise to physical units
+        reg_vals = F.denormalize_targets(
+            pred_reg.cpu().numpy(), self.target_stats
+        )  # (N, 7) in physical units
 
         results = []
         for i in range(len(df)):

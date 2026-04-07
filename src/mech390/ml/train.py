@@ -219,8 +219,13 @@ def run_training(cfg: Dict[str, Any]) -> None:
     scaler       = F.fit_scaler(train_df)
     target_stats = F.compute_target_stats(train_df)
 
-    X_tr, y_clf_tr, y_reg_tr = F.get_arrays(train_df, scaler)
-    X_val, y_clf_val, y_reg_val = F.get_arrays(val_df, scaler)
+    X_tr,  y_clf_tr,  y_reg_tr_raw  = F.get_arrays(train_df, scaler)
+    X_val, y_clf_val, y_reg_val_raw = F.get_arrays(val_df,   scaler)
+
+    # Normalise regression targets to [0, 1] so MSE loss is not dominated
+    # by targets with large physical scales (e.g. volume_envelope in m³).
+    y_reg_tr  = F.normalize_targets(y_reg_tr_raw,  target_stats)
+    y_reg_val = F.normalize_targets(y_reg_val_raw, target_stats)
 
     default_bs = int(cfg['training']['batch_size_options'][1])  # middle option as default
     base_loaders = {
