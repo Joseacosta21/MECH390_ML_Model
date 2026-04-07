@@ -189,6 +189,44 @@ def compute_target_stats(train_df: pd.DataFrame) -> Dict[str, Dict[str, float]]:
 
 
 # ---------------------------------------------------------------------------
+# Target normalisation helpers (train on [0,1]; infer in physical units)
+# ---------------------------------------------------------------------------
+
+def normalize_targets(y_reg: np.ndarray, target_stats: Dict[str, Dict[str, float]]) -> np.ndarray:
+    """
+    Normalise regression targets to [0, 1] using training min/max.
+
+    Needed so MSE loss is not dominated by targets with large physical scales
+    (e.g. volume_envelope in m³ vs utilization in [0,1]).
+    """
+    y_norm = y_reg.copy().astype(np.float32)
+    for i, col in enumerate(REGRESSION_TARGETS):
+        mn  = float(target_stats[col]['min'])
+        mx  = float(target_stats[col]['max'])
+        rng = mx - mn
+        if rng > 0:
+            y_norm[:, i] = (y_reg[:, i] - mn) / rng
+        else:
+            y_norm[:, i] = 0.0
+    return y_norm
+
+
+def denormalize_targets(y_norm: np.ndarray, target_stats: Dict[str, Dict[str, float]]) -> np.ndarray:
+    """
+    Denormalise regression predictions from [0, 1] back to physical units.
+
+    Apply this to model output before reporting or using in the optimizer
+    score function, which expects physical-unit values.
+    """
+    y_phys = y_norm.copy().astype(np.float32)
+    for i, col in enumerate(REGRESSION_TARGETS):
+        mn  = float(target_stats[col]['min'])
+        mx  = float(target_stats[col]['max'])
+        y_phys[:, i] = y_norm[:, i] * (mx - mn) + mn
+    return y_phys
+
+
+# ---------------------------------------------------------------------------
 # Persistence helpers
 # ---------------------------------------------------------------------------
 
