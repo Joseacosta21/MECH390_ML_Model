@@ -18,6 +18,7 @@ at Concordia University. CAD, prototyping, and the written report are handled ex
 - Input speed: 30 RPM
 - Quick return ratio (QRR): 1.5 – 2.5 (dataset currently reaches ~2.06 max)
 - Link material: Al 2024-T3 — ρ=2780 kg/m³, E=73.1 GPa, S_ut=483 MPa, S_y=345 MPa
+- Fatigue (Basquin): Sn=133 MPa @ 18.72M cycles; σa = 924·N^(−0.086), from experimental AA2024-T3 anchors
 - Link geometry: rectangular cross-section; widths/thicknesses 1–12 mm, pins 1–4 mm
 - Slider–guide friction μ=0.47 (dry machined Al–Al, Shigley's)
 - Dataset: n=40 samples × 5 variants = 200 designs (professor-imposed limit; negotiated from 20)
@@ -152,7 +153,7 @@ ML-readiness after any data generation run.
 4. Checks dataset statistics:
    - Row count matches expected `n_samples × n_variants_per_2d`
    - No duplicate rows (exact or near-duplicate geometry)
-   - Column count matches expected schema (71 columns in passed/failed_configs.csv as of latest run)
+   - Column count matches expected schema (85 columns in passed/failed_configs.csv as of latest run)
 5. Reports: total rows, pass/fail count per check, any suspicious rows with index
 
 ---

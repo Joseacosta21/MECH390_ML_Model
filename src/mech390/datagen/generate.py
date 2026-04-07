@@ -14,10 +14,11 @@ and returns a DatasetResult containing seven DataFrames ready for CSV export:
 
 Designs that fail physics evaluation (valid_physics=False) are silently dropped.
 Pass/fail is determined by ALL of the following checks passing:
-  - Static stress:   utilization = max(sigma_max/sigma_allow, tau_max/tau_allow) <= 1.0
-  - Buckling:        n_buck >= n_buck_target  (default 3.0)
-  - Fatigue Goodman: n_rod, n_crank, n_pin   >= 1.0
-  - Fatigue Miner:   D_rod, D_crank, D_pin   <  1.0  (when total_cycles is set)
+  - Static stress:   utilization <= limits.utilization_max
+  - Static FoS:      n_static_* >= limits.n_static_min
+  - Buckling:        n_buck >= limits.n_buck_min
+  - Fatigue Goodman: n_rod, n_crank, n_pin >= configured minima
+  - Fatigue Miner:   D_rod, D_crank, D_pin < configured maxima (when total_cycles is set)
 """
 
 import logging
@@ -98,11 +99,33 @@ def _extract_geom(design: Dict[str, Any]) -> Dict[str, Any]:
     return {col: design.get(col) for col in _GEOM_COLS}
 
 
+def _as_scalar(name: str, value: Any, default: float) -> float:
+    """
+    Coerce a config value to a scalar float.
+
+    Supports:
+      - scalar numeric values
+      - range dicts {'min': x, 'max': y} (uses conservative min)
+    """
+    if value is None:
+        return float(default)
+    if isinstance(value, dict):
+        v_min = float(value.get('min', default))
+        v_max = float(value.get('max', v_min))
+        if abs(v_max - v_min) > 1e-12:
+            logger.warning(
+                "%s provided as a range (min=%g, max=%g); using conservative min=%g.",
+                name, v_min, v_max, v_min,
+            )
+        return v_min
+    return float(value)
+
+
 def _compute_checks(
     metrics:       Dict[str, Any],
     sigma_limit:   float,
     tau_limit:     float,
-    n_buck_target: float,
+    check_limits:  Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     Compute all pass/fail checks and the overall pass_fail label.
@@ -117,16 +140,35 @@ def _compute_checks(
     u_sigma = s_max / sigma_limit if sigma_limit > 0 else 0.0
     u_tau   = t_max / tau_limit   if tau_limit   > 0 else 0.0
     utilization = max(u_sigma, u_tau)
+    utilization_max = float(check_limits['utilization_max'])
     checks['utilization']         = utilization
-    checks['check_static_passed'] = bool(utilization <= 1.0)
+    checks['utilization_max']     = utilization_max
+    checks['check_static_passed'] = bool(utilization <= utilization_max)
+
+    # Static FoS per component from peak normal stresses
+    for comp, peak_key in (
+        ('rod', 'sigma_rod_peak'),
+        ('crank', 'sigma_crank_peak'),
+        ('pin', 'sigma_pin_peak'),
+    ):
+        peak = float(metrics.get(peak_key, 0.0) or 0.0)
+        n_static = sigma_limit / peak if peak > 0.0 else float('inf')
+        n_static_min = float(check_limits[f'n_static_{comp}_min'])
+        checks[f'n_static_{comp}'] = n_static
+        checks[f'n_static_{comp}_min'] = n_static_min
+        checks[f'check_static_sf_{comp}_passed'] = bool(
+            n_static >= n_static_min if np.isfinite(n_static) else True
+        )
 
     # --- Buckling ---
     n_buck = metrics.get('n_buck', float('inf'))
+    n_buck_min = float(check_limits['n_buck_min'])
     checks['n_buck']               = n_buck
+    checks['n_buck_min']           = n_buck_min
     checks['P_cr']                 = metrics.get('P_cr', float('nan'))
     checks['N_max_comp']           = metrics.get('N_max_comp', float('nan'))
     checks['check_buckling_passed'] = bool(
-        n_buck >= n_buck_target if np.isfinite(n_buck) else True
+        n_buck >= n_buck_min if np.isfinite(n_buck) else True
     )
 
     # --- Fatigue Goodman+ECY governing safety factor ---
@@ -140,16 +182,20 @@ def _compute_checks(
         checks[f'n_y_{comp}']                 = metrics.get(f'n_y_{comp}',        float('nan'))
         checks[f'N_f_{comp}']                 = metrics.get(f'N_f_{comp}',        float('nan'))
         checks[f't_f_{comp}']                 = metrics.get(f't_f_{comp}',        float('nan'))
+        n_fatigue_min = float(check_limits[f'n_fatigue_{comp}_min'])
+        checks[f'n_fatigue_{comp}_min'] = n_fatigue_min
         checks[f'check_fatigue_{comp}_passed'] = bool(
-            n >= 1.0 if np.isfinite(n) else True
+            n >= n_fatigue_min if np.isfinite(n) else True
         )
 
     # --- Miner's rule damage ---
     for comp in ('rod', 'crank', 'pin'):
         D = metrics.get(f'D_{comp}', None)
+        d_miner_max = float(check_limits[f'D_miner_{comp}_max'])
         checks[f'D_{comp}'] = D
+        checks[f'D_miner_{comp}_max'] = d_miner_max
         if D is not None:
-            checks[f'check_miner_{comp}_passed'] = bool(D < 1.0)
+            checks[f'check_miner_{comp}_passed'] = bool(D < d_miner_max)
         else:
             checks[f'check_miner_{comp}_passed'] = True  # not computed → not failed
 
@@ -162,6 +208,9 @@ def _compute_checks(
     # --- Overall pass/fail ---
     bool_checks = [
         checks['check_static_passed'],
+        checks['check_static_sf_rod_passed'],
+        checks['check_static_sf_crank_passed'],
+        checks['check_static_sf_pin_passed'],
         checks['check_buckling_passed'],
         checks['check_fatigue_rod_passed'],
         checks['check_fatigue_crank_passed'],
@@ -296,21 +345,25 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
     mu_default    = float(get_or_warn(operating,  'mu',           0.0,   context=_ctx))
     g_default     = float(get_or_warn(operating,  'g',            9.81,  context=_ctx))
     m_block       = float(get_or_warn(operating,  'P',            0.0,   context=_ctx))
-    sigma_allow   = float(get_or_warn(limits_cfg, 'sigma_allow',  1e20,  context=_ctx))
-    tau_allow     = float(get_or_warn(limits_cfg, 'tau_allow',    1e20,  context=_ctx))
     safety_factor = float(get_or_warn(limits_cfg, 'safety_factor', 1.0,  context=_ctx))
-    n_buck_target = float(get_or_warn(sa_cfg,     'n_buck_target', 3.0,  context=_ctx))
+    n_buck_min = float(get_or_warn(limits_cfg, 'n_buck_min', get_or_warn(sa_cfg, 'n_buck_target', 3.0, context=_ctx), context=_ctx))
+    utilization_max = float(get_or_warn(limits_cfg, 'utilization_max', 1.0, context=_ctx))
+    n_static_min = float(get_or_warn(limits_cfg, 'n_static_min', 1.0, context=_ctx))
+    n_fatigue_default = float(get_or_warn(limits_cfg, 'n_fatigue_min', 1.0, context=_ctx))
+    d_miner_max = float(get_or_warn(limits_cfg, 'D_miner_max', 1.0, context=_ctx))
 
-    sigma_limit = sigma_allow / safety_factor
-    tau_limit   = tau_allow   / safety_factor
+    # Static stress limits derived from S_y (Von Mises for shear yield: S_sy = 0.577 * S_y).
+    sigma_yield_material = float(get_or_warn(material, 'S_y', 345e6, context=_ctx))
+    tau_yield_material   = 0.577 * sigma_yield_material
+    sigma_limit = sigma_yield_material / safety_factor
+    tau_limit   = tau_yield_material   / safety_factor
 
     # Material props injected into every design dict before physics eval
     _mat = {
         'E':             float(get_or_warn(material, 'E',             73.1e9, context=_ctx)),
         'S_ut':          float(get_or_warn(material, 'S_ut',          483e6,  context=_ctx)),
         'S_y':           float(get_or_warn(material, 'S_y',           345e6,  context=_ctx)),
-        'Sn':            float(get_or_warn(material, 'Sn',            get_or_warn(material, 'S_prime_e', 130e6, context=_ctx), context=_ctx)),
-        'sigma_f_prime': float(get_or_warn(material, 'sigma_f_prime', 807e6,  context=_ctx)),
+        'Sn':            float(get_or_warn(material, 'Sn',  133e6, context=_ctx)),
     }
 
     # Stress-analysis constants injected into every design dict
@@ -318,14 +371,30 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
         'delta':            float(get_or_warn(sa_cfg, 'delta',            1e-4,   context=_ctx)),
         'Kt_lug':           float(get_or_warn(sa_cfg, 'Kt_lug',           2.34,   context=_ctx)),
         'Kt_hole_torsion':  float(get_or_warn(sa_cfg, 'Kt_hole_torsion',  4.0,    context=_ctx)),
-        'n_buck_target':    n_buck_target,
-        'N_basquin_anchor': float(get_or_warn(sa_cfg, 'N_basquin_anchor', 2.0e6,  context=_ctx)),
+        'n_buck_target':    n_buck_min,
+        'basquin_A':        float(get_or_warn(sa_cfg, 'basquin_A', 924e6,  context=_ctx)),
+        'basquin_b':        float(get_or_warn(sa_cfg, 'basquin_b', -0.086, context=_ctx)),
+        'C_sur':            float(get_or_warn(sa_cfg, 'C_sur',           0.88,   context=_ctx)),
         'C_st':             float(get_or_warn(sa_cfg, 'C_st',            1.0,    context=_ctx)),
         'C_R':              float(get_or_warn(sa_cfg, 'C_R',             0.81,   context=_ctx)),
         'C_f':              float(get_or_warn(sa_cfg, 'C_f',             1.0,    context=_ctx)),
         'C_m':              float(get_or_warn(sa_cfg, 'C_m',             1.0,    context=_ctx)),
         # Crank angular acceleration — 0.0 for constant RPM (per instructions.md)
         'alpha_r':          0.0,
+    }
+
+    check_limits = {
+        'utilization_max': utilization_max,
+        'n_buck_min': n_buck_min,
+        'n_static_rod_min': float(get_or_warn(limits_cfg, 'n_static_rod_min', n_static_min, context=_ctx)),
+        'n_static_crank_min': float(get_or_warn(limits_cfg, 'n_static_crank_min', n_static_min, context=_ctx)),
+        'n_static_pin_min': float(get_or_warn(limits_cfg, 'n_static_pin_min', n_static_min, context=_ctx)),
+        'n_fatigue_rod_min': float(get_or_warn(limits_cfg, 'n_fatigue_rod_min', n_fatigue_default, context=_ctx)),
+        'n_fatigue_crank_min': float(get_or_warn(limits_cfg, 'n_fatigue_crank_min', n_fatigue_default, context=_ctx)),
+        'n_fatigue_pin_min': float(get_or_warn(limits_cfg, 'n_fatigue_pin_min', n_fatigue_default, context=_ctx)),
+        'D_miner_rod_max': float(get_or_warn(limits_cfg, 'D_miner_rod_max', d_miner_max, context=_ctx)),
+        'D_miner_crank_max': float(get_or_warn(limits_cfg, 'D_miner_crank_max', d_miner_max, context=_ctx)),
+        'D_miner_pin_max': float(get_or_warn(limits_cfg, 'D_miner_pin_max', d_miner_max, context=_ctx)),
     }
 
     # -------------------------------------------------------------------------
@@ -445,7 +514,7 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
         })
 
         # --- Checks + pass/fail ---
-        checks = _compute_checks(metrics, sigma_limit, tau_limit, n_buck_target)
+        checks = _compute_checks(metrics, sigma_limit, tau_limit, check_limits)
 
         config_row: Dict[str, Any] = {
             'design_id': design_id,
@@ -461,13 +530,6 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
         config_row['F_A_max']         = metrics.get('F_A_max')
         config_row['F_B_max']         = metrics.get('F_B_max')
         config_row['F_C_max']         = metrics.get('F_C_max')
-        _s_rod   = metrics.get('sigma_rod_peak',   0.0) or 0.0
-        _s_crank = metrics.get('sigma_crank_peak', 0.0) or 0.0
-        _s_pin   = metrics.get('sigma_pin_peak',   0.0) or 0.0
-        config_row['n_static_rod']   = sigma_limit / _s_rod   if _s_rod   > 0 else float('inf')
-        config_row['n_static_crank'] = sigma_limit / _s_crank if _s_crank > 0 else float('inf')
-        config_row['n_static_pin']   = sigma_limit / _s_pin   if _s_pin   > 0 else float('inf')
-
         if checks['pass_fail'] == 1:
             pass_rows.append(config_row)
         else:
