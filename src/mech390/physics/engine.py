@@ -52,7 +52,7 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
             'I_area_crank_yy/zz', 'I_area_rod_yy/zz' — area moments (m^4)
             'I_mass_crank_cg_z', 'I_mass_rod_cg_z'   — mass MOI (kg*m^2)
             'E', 'S_ut', 'S_y', 'Sn',
-            'sigma_f_prime', 'n_rpm', 'total_cycles'  — material / fatigue props
+            'basquin_A', 'basquin_b', 'n_rpm', 'total_cycles'  — material / fatigue props
 
     Returns:
         dict with keys:

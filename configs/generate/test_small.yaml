@@ -51,8 +51,6 @@ sweep:
   theta_step_deg: 15
 
 limits:
-  sigma_allow: 180e6
-  tau_allow: 100e6
   safety_factor: 1.0
 
 output:

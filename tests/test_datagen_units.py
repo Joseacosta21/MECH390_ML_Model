@@ -140,8 +140,8 @@ class TestKinematicsAndDatagen(unittest.TestCase):
         """Config loader should coerce scientific-notation strings to numeric values."""
         config = get_baseline_config()
 
-        self.assertIsInstance(config["limits"]["sigma_allow"], float)
-        self.assertAlmostEqual(config["limits"]["sigma_allow"], 180e6)
+        self.assertIsInstance(config["limits"]["safety_factor"], float)
+        self.assertAlmostEqual(config["limits"]["safety_factor"], 1.0)
 
         self.assertIsInstance(config["material"]["yield_stress"]["min"], float)
         self.assertAlmostEqual(config["material"]["yield_stress"]["min"], 100e6)
@@ -254,7 +254,7 @@ class TestKinematicsAndDatagen(unittest.TestCase):
 
         config = {
             "random_seed": 11,
-            "limits": {"sigma_allow": 180e6, "tau_allow": 100e6, "safety_factor": 1.0},
+            "limits": {"safety_factor": 1.0},
         }
 
         with patch(
@@ -288,7 +288,7 @@ class TestKinematicsAndDatagen(unittest.TestCase):
         config = {
             "random_seed": 7,
             "operating": {"mu": 0.37},
-            "limits": {"sigma_allow": 180e6, "tau_allow": 100e6, "safety_factor": 1.0},
+            "limits": {"safety_factor": 1.0},
         }
 
         with patch(

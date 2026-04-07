@@ -105,10 +105,10 @@ configs/generate/baseline.yaml
 │                         │  tau_A_max, E_rev, F_A/B/C_max
 │                         │  n_static_rod/crank/pin
 └──────────┬──────────────┘
-           │ labeled dataset (71 cols)
+           │ labeled dataset (85 cols)
            ▼
 ┌─────────────────────────┐
-│  ML Training            │  ml/  ← STUBS (architecture decided)
+│  ML Training            │  ml/
 │  PyTorch multi-task NN  │  ReLU trunk + classification & regression heads
 │  Optuna hyperpar. sweep │  Inputs: 10 design vars → pass_fail + 4 targets
 └─────────────────────────┘
@@ -134,7 +134,7 @@ configs/generate/baseline.yaml
 | `F_A`, `F_B`, `F_C` | Joint reaction vectors [Fx, Fy] | N |
 | `N`, `F_f`, `tau_A` | Slider normal, friction, drive torque | N, N, N·m |
 | `sigma_max`, `tau_max` | Peak normal/shear stress over cycle | Pa |
-| `n_static_rod/crank/pin` | Static FOS per link: σ_allow / peak σ_link | — |
+| `n_static_rod/crank/pin` | Static FOS per link: sigma_limit / peak σ_link, with `sigma_limit = yield_stress/safety_factor` | — |
 | `total_mass` | mass_crank + mass_rod + mass_slider | kg |
 | `volume_envelope` | Bounding-box volume of assembled mechanism (T × H × L) | m³ |
 | `tau_A_max` | Peak motor torque over full cycle | N·m |
@@ -174,7 +174,7 @@ MECH390_ML_Model/
 │   │   ├── sampling.py          # ✅ LHS + random sampler
 │   │   ├── stage1_kinematic.py  # ✅ Full Stage 1 (streaming iterator)
 │   │   ├── stage2_embodiment.py # ✅ 3D expansion
-│   │   └── generate.py          # ✅ Orchestrator with pass/fail labeling (71 cols)
+│   │   └── generate.py          # ✅ Orchestrator with pass/fail labeling (85 cols)
 │   └── ml/
 │       ├── __init__.py          # ✅ Package init
 │       ├── features.py          # ✅ Scaler, feature split, min_n_static, target stats
@@ -242,7 +242,9 @@ python3 -m venv .venv
 
 ## 5. Known bugs
 
-No open bugs.
+| Bug | Location | Impact |
+|---|---|---|
+| Net-section fallback (`1e-9`) produces unphysical stresses (~TPa) when `pin_diameter + clearance ≥ link_width` | `stresses.py:218, 256, 358, 399` | Affects ~7–27 rows in `failed_configs` only. Labels correct (pass_fail = 0). Stress magnitudes meaningless — clip or log-transform stress features before ML training. Fix: reject degenerate geometry upstream in Stage 2. |
 
 ---
 
@@ -282,12 +284,15 @@ No open bugs.
 
 ### Optimization and visualization (Week 8)
 
+- [ ] **`scripts/visualize_design.py`** — CLI: reads a CSV (passed/failed_configs), renders a 2D mechanism drawing for a given `design_id`. Shows crank, rod, slider with correct cross-section widths, pin circles at A/B/C, guide rail, and annotates pass/fail + key metrics (ROM, QRR, n_f, n_buck). Args: `--csv`, `--id`, `--angle` (default: extended position). ~130 lines.
 - [ ] **Sensitivity plots** — plot each input feature vs `utilization` / `pass_fail`
 - [ ] **Parameter correlation map** — heatmap of feature–target correlations
 
 ### Physics and testing
 
-- [ ] **Size factor formula check** — verify `C_s` implementation against selected reference equation/range
+- [x] **Size factor formula check** — replaced Shigley piecewise with Mott Table 5-3; split `C_s` (size) and `C_sur` (manufacturing method) per Mott naming
+- [x] **Sn verified** — 133 MPa at design life 18.72×10⁶ cycles (Al 2024-T3, ASM)
+- [x] **Fix Basquin exponent denominator** — replaced synthetic steel-origin formula with experimental AA2024-T3 constants: `σa = 924·N^(−0.086)` from anchors (10⁷, 230 MPa) + (10⁹, 155 MPa)
 - [ ] **`preview_stresses.py`** — like `preview_forces.py` but outputs σ/τ per angle
 - [ ] **Expand `test_datagen_units.py`** — add dynamics, mass properties, and stress tests
 - [ ] **Add regression tests** — fixed-seed full pipeline run vs reference snapshot
