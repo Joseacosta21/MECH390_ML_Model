@@ -6,8 +6,8 @@
 # ---------------------------------------------------------------------------
 
 data:
-  csv_pass: data/raw/passed_configs.csv
-  csv_fail: data/raw/failed_configs.csv
+  csv_pass: data/preview/passed_configs.csv
+  csv_fail: data/preview/failed_configs.csv
   train_frac:  0.70
   val_frac:    0.15
   # test_frac is inferred as 1 - train_frac - val_frac = 0.15
