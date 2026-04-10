@@ -107,9 +107,10 @@ Teams will transition from dataset preparation to building and training machine 
 
 The validated machine learning models will be applied for optimization. Teams will use their models as surrogates to explore the design space efficiently to identify slider crank configurations that balance size, strength, and manufacturability. Optimization objectives should include minimizing the size and weight of the mechanism, minimizing the motor power required while meeting design targets. The best candidate configurations identified by the machine learning model should be cross-checked with the Excel/Matlab tool to ensure compliance and accuracy. Teams should also start generating visual insights, such as sensitivity plots and parameter correlation maps, to better understand the influence of design parameters. By the end of this week, each team should have a short list of optimized designs, supported by both ML predictions and Excel tool ready for detailed CAD modeling. A four-page progress report will be submitted.
 
-### Week 9
+### Week #9
 
-Teams will begin developing a detailed CAD model of the optimized configuration identified as a nominal design. Using software such as SolidWorks, each team will create precise 3D models of the slider crank mechanism components, including links, pins, bearings, housings, and covers based on the dimensions and parameters validated against the Excel tool and the machine learning outputs. Attention should be paid to maintaining accuracy in geometry, and tolerances. A four-page progress report will be submitted.
+Teams will begin developing a detailed CAD model of the optimized configuration identified as
+a nominal design. Using software such as SolidWorks, each team will create precise 3D models of the slider crank mechanism components, including links, pins, bearings, housings, and covers based on the dimensions and parameters validated against the Excel tool and the machine learning outputs. Attention 5 should be paid to maintaining accuracy in geometry, and tolerances. A four-page progress report will be submitted.
 
 ### Week 10
 

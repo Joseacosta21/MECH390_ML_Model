@@ -14,14 +14,26 @@ baseline.yaml is automatically respected here — no duplication.
 
 import argparse
 import logging
+import random
 import sys
 from pathlib import Path
 
+import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 from mech390.ml.optimize import run_optimization
+
+
+def _seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        import torch
+        torch.manual_seed(seed)
+    except ImportError:
+        pass
 
 
 def _parse_args():
@@ -54,6 +66,11 @@ def _parse_args():
         help='Path to target_stats.json (default: data/models/target_stats.json)',
     )
     p.add_argument(
+        '--seed', '-s',
+        type=int, default=None,
+        help='Global random seed for reproducibility.',
+    )
+    p.add_argument(
         '--log-level',
         default='INFO',
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
@@ -83,7 +100,7 @@ def _print_results(results):
             unit = 'mm' if k not in ('pass_prob', 'weighted_score') else ''
             val  = r[k] * 1000 if k in ('r','l','e','width_r','thickness_r',
                                           'width_l','thickness_l',
-                                          'pin_diameter_A','pin_diameter_B','pin_diameter_C') else r[k]
+                                          'd_shaft_A','pin_diameter_B','pin_diameter_C') else r[k]
             print(f'    {k:20s}: {val:8.3f} mm')
         print('  Predicted performance:')
         print(f'    {"total_mass":20s}: {r["pred_total_mass"]*1000:.1f} g')
@@ -106,6 +123,9 @@ def main():
         format  = '%(asctime)s  %(levelname)-8s  %(name)s — %(message)s',
         datefmt = '%H:%M:%S',
     )
+
+    if args.seed is not None:
+        _seed_everything(args.seed)
 
     gen_cfg = _load_yaml(args.generate_config)
     opt_cfg = _load_yaml(args.optimize_config)

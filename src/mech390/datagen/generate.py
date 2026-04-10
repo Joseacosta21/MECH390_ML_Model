@@ -29,6 +29,8 @@ import numpy as np
 import pandas as pd
 
 from mech390.datagen import stage1_kinematic, stage2_embodiment
+from mech390.datagen.validation import compute_checks
+from mech390.physics import buckling as _buckling
 from mech390.physics._utils import get_or_warn
 
 try:
@@ -49,7 +51,7 @@ _GEOM_COLS = [
     'ROM', 'QRR', 'omega',
     'width_r', 'thickness_r',
     'width_l', 'thickness_l',
-    'pin_diameter_A', 'pin_diameter_B', 'pin_diameter_C',
+    'd_shaft_A', 'pin_diameter_B', 'pin_diameter_C',
     'mass_crank', 'mass_rod', 'mass_slider',
 ]
 
@@ -119,109 +121,6 @@ def _as_scalar(name: str, value: Any, default: float) -> float:
             )
         return v_min
     return float(value)
-
-
-def _compute_checks(
-    metrics:       Dict[str, Any],
-    sigma_limit:   float,
-    tau_limit:     float,
-    check_limits:  Dict[str, Any],
-) -> Dict[str, Any]:
-    """
-    Compute all pass/fail checks and the overall pass_fail label.
-
-    Returns a flat dict of check columns to be merged into the per-design row.
-    """
-    checks: Dict[str, Any] = {}
-
-    # --- Static stress ---
-    s_max = metrics.get('sigma_max', 0.0)
-    t_max = metrics.get('tau_max',   0.0)
-    u_sigma = s_max / sigma_limit if sigma_limit > 0 else 0.0
-    u_tau   = t_max / tau_limit   if tau_limit   > 0 else 0.0
-    utilization = max(u_sigma, u_tau)
-    utilization_max = float(check_limits['utilization_max'])
-    checks['utilization']         = utilization
-    checks['utilization_max']     = utilization_max
-    checks['check_static_passed'] = bool(utilization <= utilization_max)
-
-    # Static FoS per component from peak normal stresses
-    for comp, peak_key in (
-        ('rod', 'sigma_rod_peak'),
-        ('crank', 'sigma_crank_peak'),
-        ('pin', 'sigma_pin_peak'),
-    ):
-        peak = float(metrics.get(peak_key, 0.0) or 0.0)
-        n_static = sigma_limit / peak if peak > 0.0 else float('inf')
-        n_static_min = float(check_limits[f'n_static_{comp}_min'])
-        checks[f'n_static_{comp}'] = n_static
-        checks[f'n_static_{comp}_min'] = n_static_min
-        checks[f'check_static_sf_{comp}_passed'] = bool(
-            n_static >= n_static_min if np.isfinite(n_static) else True
-        )
-
-    # --- Buckling ---
-    n_buck = metrics.get('n_buck', float('inf'))
-    n_buck_min = float(check_limits['n_buck_min'])
-    checks['n_buck']               = n_buck
-    checks['n_buck_min']           = n_buck_min
-    checks['P_cr']                 = metrics.get('P_cr', float('nan'))
-    checks['N_max_comp']           = metrics.get('N_max_comp', float('nan'))
-    checks['check_buckling_passed'] = bool(
-        n_buck >= n_buck_min if np.isfinite(n_buck) else True
-    )
-
-    # --- Fatigue Goodman+ECY governing safety factor ---
-    for comp in ('rod', 'crank', 'pin'):
-        n = metrics.get(f'n_{comp}', float('inf'))
-        checks[f'n_{comp}']                   = n
-        checks[f'S_n_prime_{comp}']           = metrics.get(f'S_n_prime_{comp}', float('nan'))
-        checks[f'sigma_a_eq_{comp}']          = metrics.get(f'sigma_a_eq_{comp}', float('nan'))
-        checks[f'sigma_m_eq_{comp}']          = metrics.get(f'sigma_m_eq_{comp}', float('nan'))
-        checks[f'n_f_{comp}']                 = metrics.get(f'n_f_{comp}',        float('nan'))
-        checks[f'n_y_{comp}']                 = metrics.get(f'n_y_{comp}',        float('nan'))
-        checks[f'N_f_{comp}']                 = metrics.get(f'N_f_{comp}',        float('nan'))
-        checks[f't_f_{comp}']                 = metrics.get(f't_f_{comp}',        float('nan'))
-        n_fatigue_min = float(check_limits[f'n_fatigue_{comp}_min'])
-        checks[f'n_fatigue_{comp}_min'] = n_fatigue_min
-        checks[f'check_fatigue_{comp}_passed'] = bool(
-            n >= n_fatigue_min if np.isfinite(n) else True
-        )
-
-    # --- Miner's rule damage ---
-    for comp in ('rod', 'crank', 'pin'):
-        D = metrics.get(f'D_{comp}', None)
-        d_miner_max = float(check_limits[f'D_miner_{comp}_max'])
-        checks[f'D_{comp}'] = D
-        checks[f'D_miner_{comp}_max'] = d_miner_max
-        if D is not None:
-            checks[f'check_miner_{comp}_passed'] = bool(D < d_miner_max)
-        else:
-            checks[f'check_miner_{comp}_passed'] = True  # not computed → not failed
-
-    # --- sigma/tau sweep summary ---
-    checks['sigma_max']       = metrics.get('sigma_max',       float('nan'))
-    checks['tau_max']         = metrics.get('tau_max',         float('nan'))
-    checks['theta_sigma_max'] = metrics.get('theta_sigma_max', float('nan'))
-    checks['theta_tau_max']   = metrics.get('theta_tau_max',   float('nan'))
-
-    # --- Overall pass/fail ---
-    bool_checks = [
-        checks['check_static_passed'],
-        checks['check_static_sf_rod_passed'],
-        checks['check_static_sf_crank_passed'],
-        checks['check_static_sf_pin_passed'],
-        checks['check_buckling_passed'],
-        checks['check_fatigue_rod_passed'],
-        checks['check_fatigue_crank_passed'],
-        checks['check_fatigue_pin_passed'],
-        checks['check_miner_rod_passed'],
-        checks['check_miner_crank_passed'],
-        checks['check_miner_pin_passed'],
-    ]
-    checks['pass_fail'] = 1 if all(bool_checks) else 0
-
-    return checks
 
 
 def _prefix_rows(
@@ -340,11 +239,12 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
     material   = config.get('material', {})
     sa_cfg     = config.get('stress_analysis', {})
 
-    rpm           = float(get_or_warn(operating,  'RPM',          30,    context=_ctx))
-    omega         = rpm * 2.0 * np.pi / 60.0
+    rpm            = float(get_or_warn(operating, 'RPM',            30,   context=_ctx))
+    sweep_step_deg = float(get_or_warn(operating, 'sweep_step_deg', 15.0, context=_ctx))
+    omega          = rpm * 2.0 * np.pi / 60.0
     mu_default    = float(get_or_warn(operating,  'mu',           0.0,   context=_ctx))
     g_default     = float(get_or_warn(operating,  'g',            9.81,  context=_ctx))
-    m_block       = float(get_or_warn(operating,  'P',            0.0,   context=_ctx))
+    m_block       = float(get_or_warn(operating,  'm_block',      0.0,   context=_ctx))
     safety_factor = float(get_or_warn(limits_cfg, 'safety_factor', 1.0,  context=_ctx))
     n_buck_min = float(get_or_warn(limits_cfg, 'n_buck_min', get_or_warn(sa_cfg, 'n_buck_target', 3.0, context=_ctx), context=_ctx))
     utilization_max = float(get_or_warn(limits_cfg, 'utilization_max', 1.0, context=_ctx))
@@ -368,10 +268,12 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
 
     # Stress-analysis constants injected into every design dict
     _sa = {
-        'delta':            float(get_or_warn(sa_cfg, 'delta',            1e-4,   context=_ctx)),
+        'delta':            float(get_or_warn(sa_cfg, 'diametral_clearance_m', 1e-4, context=_ctx)),
         'Kt_lug':           float(get_or_warn(sa_cfg, 'Kt_lug',           2.34,   context=_ctx)),
         'Kt_hole_torsion':  float(get_or_warn(sa_cfg, 'Kt_hole_torsion',  4.0,    context=_ctx)),
         'n_buck_target':    n_buck_min,
+        'L_bearing':        float(get_or_warn(sa_cfg, 'L_bearing',  0.010, context=_ctx)),
+        'n_shaft_min':      float(get_or_warn(limits_cfg, 'n_shaft_min', 2.0, context=_ctx)),
         'basquin_A':        float(get_or_warn(sa_cfg, 'basquin_A', 924e6,  context=_ctx)),
         'basquin_b':        float(get_or_warn(sa_cfg, 'basquin_b', -0.086, context=_ctx)),
         'C_sur':            float(get_or_warn(sa_cfg, 'C_sur',           0.88,   context=_ctx)),
@@ -395,6 +297,7 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
         'D_miner_rod_max': float(get_or_warn(limits_cfg, 'D_miner_rod_max', d_miner_max, context=_ctx)),
         'D_miner_crank_max': float(get_or_warn(limits_cfg, 'D_miner_crank_max', d_miner_max, context=_ctx)),
         'D_miner_pin_max': float(get_or_warn(limits_cfg, 'D_miner_pin_max', d_miner_max, context=_ctx)),
+        'n_shaft_min':     float(get_or_warn(limits_cfg, 'n_shaft_min', 2.0, context=_ctx)),
     }
 
     # -------------------------------------------------------------------------
@@ -448,17 +351,33 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
         _e   = float(design_eval['e'])
         _tr  = float(design_eval.get('thickness_r',    0.0))
         _tl  = float(design_eval.get('thickness_l',    0.0))
-        _pA  = float(design_eval.get('pin_diameter_A', 0.0))
-        # Bounding-box dimensions (see plan for derivation)
-        _T = _pA + _tr + (_tl + _s_h) / 2.0
-        _H = _r + min(_r, _e + _s_h / 2.0)
+        _pA  = float(design_eval.get('d_shaft_A', 0.0))  # shaft A diameter
+        # Bounding-box dimensions — see instructions.md Section 3.4 for full derivation.
+        #
+        # Assembly cross-section (z-axis, out-of-plane view from +z):
+        #   R and L touch face-to-face at a shared contact plane (blue line).
+        #   L and S share the same centreline (centred on the contact plane side of L).
+        #   Right of contact plane: t_l/2 (half of L) + t_s/2 (half of S, centred on L)
+        #   Left  of contact plane: max(t_r, (t_s - t_l)/2)
+        #     — t_r if the crank is thicker than the slider overhang; else slider overhang dominates
+        _T = (_tl + _s_h) / 2.0 + max(_tr, (_s_h - _tl) / 2.0)
+        #
+        # Vertical extent (y-axis): crank pivot A is at y=0; slider guide is e below A (y = -e).
+        #   Top:    crank pin B at y = +r
+        #   Bottom: lower of crank pin at y = -r  OR  slider block bottom at y = -(e + s_h/2)
+        _H = _r + max(_r, _e + _s_h / 2.0)
+        #
+        # Horizontal extent (x-axis): crank pivot A at origin.
+        #   Left:  crank pin B at x = -r (θ = 180°)
+        #   Right: slider pin C at maximum extension x = sqrt((r+l)² - e²), plus half slider block
         _L = _r + float(np.sqrt(max((_r + _l)**2 - _e**2, 0.0))) + _s_l / 2.0
         design_eval['volume_envelope'] = _T * _H * _L
 
         # --- Inject material + stress-analysis constants ---
         design_eval.update(_mat)
         design_eval.update(_sa)
-        design_eval['n_rpm']        = rpm
+        design_eval['n_rpm']          = rpm
+        design_eval['sweep_step_deg'] = sweep_step_deg
         design_eval['total_cycles'] = float(
             get_or_warn(operating, 'TotalCycles', 18720000, context=_ctx)
         )
@@ -500,13 +419,13 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
         fat_rows.append(fat_row)
 
         # --- Buckling row (per-design) ---
-        # I_min_r = w_rod * t_rod^3 / 12  (weak axis, same formula as buckling.py)
+        # I_min_r = min(w·t³, t·w³) / 12  — always the weaker axis (matches buckling.py).
         w_rod = float(design_eval.get('width_l', 0.0))
         t_rod = float(design_eval.get('thickness_l', 0.0))
         buck_rows.append({
             'design_id':       design_id,
             **geom,
-            'I_min_r':         w_rod * t_rod**3 / 12.0,
+            'I_min_r':         _buckling.I_weak_axis(w_rod, t_rod),
             'P_cr':            metrics.get('P_cr'),
             'N_max_comp':      metrics.get('N_max_comp'),
             'n_buck':          metrics.get('n_buck'),
@@ -514,7 +433,7 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
         })
 
         # --- Checks + pass/fail ---
-        checks = _compute_checks(metrics, sigma_limit, tau_limit, check_limits)
+        checks = compute_checks(metrics, sigma_limit, tau_limit, check_limits)
 
         config_row: Dict[str, Any] = {
             'design_id': design_id,

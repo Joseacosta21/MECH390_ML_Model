@@ -32,6 +32,42 @@ _N_BUCK_TARGET_DEFAULT: float = 3.0  # baseline.yaml stress_analysis.n_buck_targ
 _E_DEFAULT: float = 73.1e9          # 2024-T3 Al elastic modulus fallback (Pa)
 
 
+def I_weak_axis(w: float, t: float) -> float:
+    """
+    Second moment of area about the weak (minimum) axis for a rectangular section.
+
+    Always returns the geometrically weaker axis regardless of whether w > t or t > w.
+    Both `buckling.evaluate()` and `optimize.py` call this to ensure the formula
+    is defined in one place.
+
+    Args:
+        w: in-plane width (m)
+        t: out-of-plane thickness (m)
+
+    Returns:
+        I_min = min(w·t³, t·w³) / 12  (m⁴)
+    """
+    return min(w * t**3, t * w**3) / 12.0
+
+
+def critical_load(w: float, t: float, l: float, E: float = _E_DEFAULT) -> float:
+    """
+    Euler critical buckling load for a pin-pin rectangular rod.
+
+    P_cr = π²·E·I_min / (K_c·l)²   with K_c = 1.0 (pin-pin)
+
+    Args:
+        w: rod width  (m)
+        t: rod thickness (m)
+        l: rod length (m)
+        E: elastic modulus (Pa); defaults to 2024-T3 Al (73.1 GPa)
+
+    Returns:
+        P_cr (N)
+    """
+    return (math.pi**2 * E * I_weak_axis(w, t)) / (_K_C * l)**2
+
+
 def evaluate(
     F_r_rod_history: Sequence[float],
     design: Dict[str, Any],
@@ -71,20 +107,20 @@ def evaluate(
           'has_compression': bool  — True if any angle has F_r,rod,B < 0
     """
     _ctx = 'buckling.evaluate'
-    w = float(design['width_l'])       # rod width (in-plane, longer dimension)
-    t = float(design['thickness_l'])   # rod thickness (out-of-plane, shorter)
-    L = float(design['l'])             # rod length (centre distance)
+    try:
+        w = float(design['width_l'])       # rod width (in-plane, longer dimension)
+        t = float(design['thickness_l'])   # rod thickness (out-of-plane, shorter)
+        L = float(design['l'])             # rod length (centre distance)
+    except KeyError as exc:
+        raise KeyError(
+            f"buckling.evaluate: required key {exc} missing from design dict"
+        ) from exc
     E = float(get_or_warn(design, 'E', _E_DEFAULT, context=_ctx))
     n_buck_target = float(get_or_warn(design, 'n_buck_target', _N_BUCK_TARGET_DEFAULT, context=_ctx))
 
-    # --- Eq 14.2: Second moment of area about weak axis ---
-    # I_min,r = I_yr = w_rod * t_rod^3 / 12
-    # Buckling occurs about y-axis since w_rod > t_rod (t is the smaller dim)
-    I_min_r = w * t**3 / 12.0
-
-    # --- Eq 14.1: Euler critical buckling load ---
-    # P_cr = pi^2 * E * I_min / (K_c * l_rod)^2
-    P_cr = (math.pi**2 * E * I_min_r) / (_K_C * L)**2
+    # --- Eq 14.2 / 14.1: weak-axis I and critical load via module helpers ---
+    I_min_r = I_weak_axis(w, t)
+    P_cr    = critical_load(w, t, L, E)
 
     # --- Eq 14.4: Maximum compressive axial force ---
     # F_r,rod,B < 0 indicates compression (see module and _rod_frame_forces docs)

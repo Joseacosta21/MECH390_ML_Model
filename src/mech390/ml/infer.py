@@ -18,7 +18,7 @@ Usage
         'r': 0.08, 'l': 0.22, 'e': 0.05,
         'width_r': 0.012, 'thickness_r': 0.008,
         'width_l': 0.010, 'thickness_l': 0.007,
-        'pin_diameter_A': 0.003, 'pin_diameter_B': 0.003, 'pin_diameter_C': 0.003,
+        'd_shaft_A': 0.003, 'pin_diameter_B': 0.003, 'pin_diameter_C': 0.003,
     })
     print(result['pass_prob'], result['total_mass'])
 """

@@ -5,36 +5,7 @@ It defines the available subagents and the rules for using them.
 
 ---
 
-## Project Context
-
-This project generates synthetic datasets for an **offset crank-slider mechanism**
-using exact kinematics and dynamics equations, then trains ML models on those datasets.
-It is the data generation and ML component of the MECH 390 Winter 2026 design project
-at Concordia University. CAD, prototyping, and the written report are handled externally.
-
-**Design specifications (fixed — not design variables):**
-- Reaction force (slider load): 500 g
-- Range of motion: 250 mm ± 0.5 mm
-- Input speed: 30 RPM
-- Quick return ratio (QRR): 1.5 – 2.5 (dataset currently reaches ~2.06 max)
-- Link material: Al 2024-T3 — ρ=2780 kg/m³, E=73.1 GPa, S_ut=483 MPa, S_y=345 MPa
-- Fatigue (Basquin): Sn=133 MPa @ 18.72M cycles; σa = 924·N^(−0.086), from experimental AA2024-T3 anchors
-- Link geometry: rectangular cross-section; widths/thicknesses 1–12 mm, pins 1–4 mm
-- Slider–guide friction μ=0.47 (dry machined Al–Al, Shigley's)
-- Dataset: n=40 samples × 5 variants = 200 designs (professor-imposed limit; negotiated from 20)
-
-**What the ML model must deliver (Weeks 6–8):**
-- Pass/fail classification for design configurations
-- Safety factor prediction (static and fatigue)
-- Optimal QRR recommendation to minimize crank torque and motor power
-- Design space exploration to minimize mechanism size and weight
-
-
-**Pipeline:**
-```
-Config (YAML) → Stage 1: 2D Kinematic Synthesis → Stage 2: 3D Embodiment
-→ Mass Properties → Physics Evaluation (15° sweep) → Pass/Fail → ML Training → Optimization
-```
+> For project background, see [README.md](README.md). For physics equations, see [The_Mother_Doc_v7.md](The_Mother_Doc_v7.md). For code contracts, see [instructions.md](instructions.md).
 
 **Key files:**
 - `src/mech390/physics/` — kinematics, dynamics, mass properties, engine
@@ -189,9 +160,80 @@ class balance, feature distributions, potential leakage, and dataset size.
 
 ---
 
+### 5. ML Data Scientist
+
+**Purpose:** Designs, critiques, and improves the neural network — architecture,
+loss function, training loop, hyperparameter search, and evaluation metrics.
+This agent focuses on making the surrogate as accurate as possible given the
+dataset constraints (currently 200 rows).
+
+**Trigger this agent when:**
+- Someone asks "how can we improve the model?", "is the NN architecture good?",
+  "should we change the loss function?", "why is n_buck prediction bad?", or similar
+- Val F1 or val R² drops after a code change
+- A new dataset is generated and retraining is needed
+- The optimizer produces physically invalid candidates (may indicate poor surrogate quality)
+- Before committing changes to any file in `src/mech390/ml/`
+
+**What this agent does:**
+1. Reads the full ML stack:
+   - `src/mech390/ml/models.py` — architecture (shared trunk, clf + reg heads)
+   - `src/mech390/ml/train.py` — loss function, Optuna sweep, early stopping logic
+   - `src/mech390/ml/features.py` — input features, regression targets, normalization
+   - `src/mech390/ml/optimize.py` — how surrogate outputs are used in optimization
+   - `configs/train/surrogate.yaml` — hyperparameter search space
+2. Audits the loss function:
+   - Are `w_bce` and `w_mse` weights balanced for the task?
+   - Is the Optuna objective (`val_f1`) the right metric, or should it be a
+     composite of F1 + mean R²?
+   - Are regression targets normalized correctly before MSE computation?
+3. Audits the architecture for the data regime (≤200 rows):
+   - Is the model capacity appropriate (risk of overfitting)?
+   - Is dropout tuned for small datasets?
+   - Would separate trunks per head improve regression accuracy?
+4. Flags unreliable regression targets:
+   - `n_buck` at 200 rows — report val R² and recommend whether to keep or drop
+   - Any target with val R² < 0.7 should be flagged as unreliable for optimizer use
+5. Recommends concrete, actionable improvements:
+   - Loss function changes (e.g., add per-head weights, switch to Huber loss)
+   - Architecture changes (e.g., deeper trunk, separate heads, residual connections)
+   - Training changes (e.g., learning rate schedule, gradient clipping)
+   - Feature engineering (e.g., derived ratios like `l/r`, `e/l`, slenderness `l/t`)
+6. Reports: current val F1, per-target val R², recommended changes ranked by
+   expected impact, and which changes require retraining vs config-only
+
+---
+
 ## Known Issues (Physics)
 
-No open bugs.
+**Sign convention at Pin A (deferred):** `stresses.py:139–140` defines `F_r,crank,A` and `F_t,crank,A` with opposite signs to Mother Doc Eqs. 2.5–2.6. No numerical impact while `abs()` wrapping is used throughout the crank stress path. See `STRESS_AUDIT.md` Section 10.
+
+## Optimizer Constraints Implemented
+
+The surrogate optimizer (`src/mech390/ml/optimize.py`) enforces four hard analytical
+constraints as penalty terms in the score function, in addition to the surrogate pass_prob gate:
+
+1. **Net-section feasibility** — `width - D_pin > delta + 2×min_wall` for all 4 pin pairs.
+   Prevents near-zero net sections that produce ~TPa stresses.
+2. **Kinematic feasibility** — `l > r + e` (rod must bridge pin B to pin C at all crank angles).
+   Without this, the optimizer could find r+e > l, which crashes the physics engine at θ≈75°.
+3. **Euler buckling** — analytical `P_cr = π²EI/l²` check; penalises `n_buck < 3.0`.
+   The surrogate's n_buck predictions are unreliable at 200 rows; this enforces it analytically.
+
+These were added after physics validation (`scripts/validate_candidate.py`) revealed that
+earlier optimizer outputs were kinematically infeasible or failed buckling.
+
+## Physics Validation Script
+
+`scripts/validate_candidate.py` — runs a specific geometry dict through the full physics
+engine without going through Stage 1 (which would re-compute r). Use this to verify any
+optimizer candidate before committing to manufacture.
+
+```bash
+.venv/bin/python scripts/validate_candidate.py --config configs/generate/baseline.yaml
+```
+
+Edit `CANDIDATE` at the top of the script to test different geometries.
 
 ---
 
@@ -219,3 +261,6 @@ Writes 7 CSVs to `data/preview/`: kinematics, dynamics, stresses, fatigue, buckl
 | "Does this equation look right?" | Spawns Physics Validator, reads instructions.md |
 | "I updated a function signature" | Spawns Cross-Reference Auditor |
 | "Everything looks off, check the whole pipeline" | Spawns all four agents in parallel |
+| "How can we improve the NN?" | Spawns ML Data Scientist |
+| "Why is n_buck prediction bad?" | Spawns ML Data Scientist |
+| "Retrain after new data" | Spawns ML Data Scientist + ML Readiness Inspector |

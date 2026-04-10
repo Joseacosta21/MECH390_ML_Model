@@ -32,9 +32,12 @@ Usage
 
 import argparse
 import logging
+import random
 import sys
 import time
 from pathlib import Path
+
+import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -88,7 +91,20 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        import torch
+        torch.manual_seed(seed)
+    except ImportError:
+        pass
+
+
 def run(config_path, seed, out_dir: Path) -> None:
+    if seed is not None:
+        _seed_everything(seed)
+
     # ---- Load config ---------------------------------------------------------
     if config_path is not None:
         logger.info("Loading config from: %s", config_path)

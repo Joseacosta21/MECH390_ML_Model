@@ -334,7 +334,7 @@ def _load_design_link_inputs(design: Mapping[str, Any]) -> Dict[str, float]:
         ("width_l", "design.width_l"),
         ("thickness_r", "design.thickness_r"),
         ("thickness_l", "design.thickness_l"),
-        ("pin_diameter_A", "design.pin_diameter_A"),
+        ("d_shaft_A", "design.d_shaft_A"),
         ("pin_diameter_B", "design.pin_diameter_B"),
         ("pin_diameter_C", "design.pin_diameter_C"),
     )
@@ -376,7 +376,7 @@ def compute_design_mass_properties(
         link_inputs["r"],
         link_inputs["width_r"],
         link_inputs["thickness_r"],
-        link_inputs["pin_diameter_A"],
+        link_inputs["d_shaft_A"],
         link_inputs["pin_diameter_B"],
         rho,
     )
@@ -400,7 +400,7 @@ def compute_design_mass_properties(
         link_inputs["r"],
         link_inputs["width_r"],
         link_inputs["thickness_r"],
-        link_inputs["pin_diameter_A"],
+        link_inputs["d_shaft_A"],
         link_inputs["pin_diameter_B"],
         rho,
     )

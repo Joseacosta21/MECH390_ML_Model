@@ -11,8 +11,8 @@ Responsibilities
 
 Column contracts
 ----------------
-INPUT_FEATURES (10)  : the 10 independent design variables
-REGRESSION_TARGETS   : continuous outputs predicted by regression heads
+INPUT_FEATURES (10)  : the 10 independent design variables (d_shaft_A replaces pin_diameter_A)
+REGRESSION_TARGETS   : continuous outputs predicted by regression heads (8 targets incl. n_shaft)
 CLASSIFICATION_TARGET: binary pass/fail label
 """
 
@@ -33,7 +33,7 @@ INPUT_FEATURES: List[str] = [
     'r', 'l', 'e',
     'width_r', 'thickness_r',
     'width_l', 'thickness_l',
-    'pin_diameter_A', 'pin_diameter_B', 'pin_diameter_C',
+    'd_shaft_A', 'pin_diameter_B', 'pin_diameter_C',
 ]
 
 CLASSIFICATION_TARGET: str = 'pass_fail'
@@ -46,6 +46,7 @@ REGRESSION_TARGETS: List[str] = [
     'min_n_static',   # derived: min(n_static_rod, n_static_crank, n_static_pin)
     'utilization',
     'n_buck',
+    'n_shaft',        # Mott 12-24 ASME-Elliptic shaft safety factor
 ]
 
 ALL_TARGETS: List[str] = [CLASSIFICATION_TARGET] + REGRESSION_TARGETS
@@ -159,7 +160,7 @@ def get_arrays(
 
     X       : (N, 10)  float32 — normalised input features
     y_clf   : (N, 1)   float32 — pass_fail label
-    y_reg   : (N, 7)   float32 — regression targets in REGRESSION_TARGETS order
+    y_reg   : (N, 8)   float32 — regression targets in REGRESSION_TARGETS order
     """
     X     = scaler.transform(df[INPUT_FEATURES].values).astype(np.float32)
     y_clf = df[[CLASSIFICATION_TARGET]].values.astype(np.float32)

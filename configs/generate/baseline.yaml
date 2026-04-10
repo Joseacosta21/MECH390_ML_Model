@@ -14,28 +14,29 @@ material:
   nu: 0.33              # Poisson's ratio
 
 geometry:
-  r: {min: 0.04, max: 0.15}        # crank radius (m)
-  l: {min: 0.1, max: 0.38}         # rod length (m)
-  e: {min: 0.00, max: 0.35}        # offset (m)
+  r: {min: 0.04, max: 0.5}        # crank radius (m)
+  l: {min: 0.04, max: 0.4}         # rod length (m)
+  e: {min: 0.00, max: 0.5}        # offset (m)
   slider:
     length: 0.02                     # slider length (m)
     width: 0.02                    # slider width (m)
     height: 0.02                     # slider height (m)
   widths:
-    width_r: {min: 0.001, max: 0.009}    # 1–9 mm  (tuned for ~50% pass rate with crank fatigue boundary)
-    width_l: {min: 0.001, max: 0.009}
+    width_r: {min: 0.001, max: 0.02}    # 1–9 mm  (tuned for ~50% pass rate with crank fatigue boundary)
+    width_l: {min: 0.001, max: 0.02}
   thicknesses:
-    thickness_r: {min: 0.001, max: 0.009}
-    thickness_l: {min: 0.001, max: 0.009}
+    thickness_r: {min: 0.001, max: 0.02}
+    thickness_l: {min: 0.001, max: 0.02}
   pin_diameters:
-    pin_diameter_A: {min: 0.001, max: 0.004}  # 1–4 mm  (was 2–5 mm)
+    d_shaft_A: {min: 0.003, max: 0.008}        # 3–8 mm  motor output shaft (press fit; Mott 12-24)
     pin_diameter_B: {min: 0.001, max: 0.004}
     pin_diameter_C: {min: 0.001, max: 0.004}
 
 
 operating:
   RPM: 30
-  P: 0.5                          # slider block mass (kg) — injected into dynamics as m_block
+  sweep_step_deg: 15              # crank angle step for the physics sweep (degrees)
+  m_block: 0.5                    # slider block mass (kg) — injected into dynamics as m_block
   mu: 0.47                        # coefficient of friction — dry machined Al–Al (Shigley's Table 8-2)
   g: 9.81                         # gravitational acceleration (m/s²)
   ROM: 0.25                       # range of motion (m)
@@ -45,8 +46,8 @@ operating:
 
 sampling:
   method: latin_hypercube          # latin_hypercube | random | grid
-  n_samples: 40              # ignored for grid
-  n_variants_per_2d: 5
+  n_samples: 1000            # ignored for grid
+  n_variants_per_2d: 10
   constraints:
     - "r > 0"
     - "l > 0"
@@ -55,7 +56,7 @@ sampling:
 stress_analysis:
   # Diametral clearance: D_hole = D_pin + delta (m)
   # 0.1 mm is a typical close-running fit for small pins.
-  delta: 1e-4                      # diametral clearance (m)
+  diametral_clearance_m: 1e-4      # diametral clearance (m): D_hole = D_pin + diametral_clearance_m
 
   # Minimum wall thickness on each side of a pin hole (m).
   # Net-section constraint: width > D_pin + delta + 2 * min_wall
@@ -70,6 +71,10 @@ stress_analysis:
 
   # Buckling target safety factor for machinery (Mother Doc Section 14.5)
   n_buck_target: 3.0
+
+  # Shaft A: bearing overhang distance from ground bearing to crank arm face (m).
+  # Used in Mott 12-24 bending moment: M = |F_A| * L_bearing.
+  L_bearing: 0.010                  # 10 mm (scalar; add as design variable if needed)
 
   # Basquin S-N constants — AA2024-T3 experimental, fully reversed (R=-1)
   # Anchors: (10^7 cycles, 230 MPa) and (10^9 cycles, 155 MPa)
@@ -106,6 +111,7 @@ limits:
   n_fatigue_crank_min: 1.0         # minimum fatigue governing FoS (crank)
   n_fatigue_pin_min: 1.0           # minimum fatigue governing FoS (pin)
   n_buck_min: 3.0                  # minimum Euler buckling FoS
+  n_shaft_min: 2.0                 # minimum shaft ASME-Elliptic FoS (Mott 12-24, press fit)
   D_miner_max: 1.0                 # shared Miner damage limit (used as fallback for per-component values)
   D_miner_rod_max: 1.0             # Miner damage limit — rod
   D_miner_crank_max: 1.0           # Miner damage limit — crank

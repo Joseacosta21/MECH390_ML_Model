@@ -35,6 +35,7 @@ from scipy.optimize import differential_evolution
 
 from mech390.ml import features as F
 from mech390.ml.models import build_model_from_hparams, load_checkpoint
+from mech390.physics import buckling as _buckling
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ def _extract_bounds(gen_cfg: Dict[str, Any]) -> List[Tuple[float, float]]:
         'thickness_r':    geo['thicknesses']['thickness_r'],
         'width_l':        geo['widths']['width_l'],
         'thickness_l':    geo['thicknesses']['thickness_l'],
-        'pin_diameter_A': geo['pin_diameters']['pin_diameter_A'],
+        'd_shaft_A':      geo['pin_diameters']['d_shaft_A'],
         'pin_diameter_B': geo['pin_diameters']['pin_diameter_B'],
         'pin_diameter_C': geo['pin_diameters']['pin_diameter_C'],
     }
@@ -77,33 +78,50 @@ def _extract_bounds(gen_cfg: Dict[str, Any]) -> List[Tuple[float, float]]:
 # ---------------------------------------------------------------------------
 
 def _build_score_fn(
-    model:           torch.nn.Module,
+    model:                    torch.nn.Module,
     scaler,
-    target_stats:    Dict[str, Dict[str, float]],
-    objectives:      Dict[str, Dict[str, Any]],
-    pass_threshold:  float,
-    min_net_section: float,
-    penalty:         float = 10.0,
-    device:          torch.device = torch.device('cpu'),
+    target_stats:             Dict[str, Dict[str, float]],
+    objectives:               Dict[str, Dict[str, Any]],
+    pass_threshold:           float,
+    min_net_section:          float,
+    n_buck_min:               float = 3.0,
+    E_material:               float = 73.1e9,
+    omega:                    float = 3.14159,
+    m_block:                  float = 0.5,
+    mu:                       float = 0.47,
+    g:                        float = 9.81,
+    penalty:                  float = 10.0,
+    penalty_net_section_scale: float = 1000.0,
+    penalty_kinematic_scale:   float = 100.0,
+    penalty_buckling_scale:    float = 1.0,
+    device:                   torch.device = torch.device('cpu'),
 ):
     """
     Returns a callable f(x) → -score  (negative because scipy minimises).
 
     x : 1-D numpy array of length 10 (raw geometry values, un-normalised)
 
-    Two hard constraints applied as penalties:
+    Four hard constraints applied as penalties:
     1. pass_prob >= pass_threshold  (surrogate classification gate)
     2. width - D_pin > min_net_section for every pin (prevents degenerate
        near-zero net sections that produce ~TPa stresses in the physics engine)
+    3. l > r + e  (kinematic feasibility: rod must bridge crank to slider at all angles)
+    4. Euler buckling FoS >= n_buck_min  (analytical estimate from rod geometry)
+       Uses P_cr = π²EI/l² and a conservative F_rod estimate from slider dynamics.
     """
     # Indices of width/pin pairs in _GEO_KEYS that must satisfy the net-section constraint:
     # (width_idx, pin_idx) matching the four physical constraints
     _NET_PAIRS = [
-        (_GEO_KEYS.index('width_r'), _GEO_KEYS.index('pin_diameter_A')),
+        (_GEO_KEYS.index('width_r'), _GEO_KEYS.index('d_shaft_A')),
         (_GEO_KEYS.index('width_r'), _GEO_KEYS.index('pin_diameter_B')),
         (_GEO_KEYS.index('width_l'), _GEO_KEYS.index('pin_diameter_B')),
         (_GEO_KEYS.index('width_l'), _GEO_KEYS.index('pin_diameter_C')),
     ]
+    _R_IDX   = _GEO_KEYS.index('r')
+    _L_IDX   = _GEO_KEYS.index('l')
+    _E_IDX   = _GEO_KEYS.index('e')
+    _W_L_IDX = _GEO_KEYS.index('width_l')
+    _T_L_IDX = _GEO_KEYS.index('thickness_l')
     model.eval()
 
     def _score(x: np.ndarray) -> float:
@@ -147,7 +165,28 @@ def _build_score_fn(
         for w_idx, p_idx in _NET_PAIRS:
             violation = min_net_section - (x[w_idx] - x[p_idx])
             if violation > 0:
-                score -= penalty * violation * 1e3   # scale to metres → significant penalty
+                score -= penalty * violation * penalty_net_section_scale
+
+        # Hard constraint 3: kinematic feasibility  l > r + e
+        # The rod must reach pin C from pin B at all crank angles.
+        # Violation when l - (r + e) <= 0.
+        kin_violation = (x[_R_IDX] + x[_E_IDX]) - x[_L_IDX]
+        if kin_violation > 0:
+            score -= penalty * kin_violation * penalty_kinematic_scale
+
+        # Hard constraint 4: Euler buckling  n_buck >= n_buck_min
+        # P_cr from buckling.critical_load() (shared formula with physics engine).
+        # Conservative rod force estimate from slider dynamics:
+        #   F_rod ≈ m_block * (r * ω² + μ * g)  (inertia + friction, upper bound)
+        w_l  = x[_W_L_IDX]
+        t_l  = x[_T_L_IDX]
+        l_v  = x[_L_IDX]
+        P_cr      = _buckling.critical_load(w_l, t_l, l_v, E_material)
+        F_rod_est = max(m_block * (x[_R_IDX] * omega**2 + mu * g), 1e-6)
+        n_buck_est = P_cr / F_rod_est
+        buck_violation = n_buck_min - n_buck_est
+        if buck_violation > 0:
+            score -= penalty * buck_violation * penalty_buckling_scale
 
         return -score   # scipy minimises, we want to maximise score
 
@@ -206,13 +245,42 @@ def run_optimization(
 
     # Net-section constraint: width - D_pin > delta + 2 * min_wall
     stress_cfg      = gen_cfg.get('stress_analysis', {})
-    delta_m         = float(stress_cfg.get('delta',       1e-4))
+    delta_m         = float(stress_cfg.get('diametral_clearance_m', 1e-4))
     min_wall_m      = float(stress_cfg.get('min_wall_mm', 0.5e-3))
     min_net_section = delta_m + 2.0 * min_wall_m
 
+    # Penalty scaling factors (from search.yaml constraints section)
+    constraint_cfg             = opt_cfg.get('constraints', {})
+    penalty_net_section_scale  = float(constraint_cfg.get('penalty_net_section_scale', 1000.0))
+    penalty_kinematic_scale    = float(constraint_cfg.get('penalty_kinematic_scale',   100.0))
+    penalty_buckling_scale     = float(constraint_cfg.get('penalty_buckling_scale',    1.0))
+
+    # Analytical buckling parameters (from material + operating config)
+    material_cfg    = gen_cfg.get('material', {})
+    operating_cfg   = gen_cfg.get('operating', {})
+    limits_cfg      = gen_cfg.get('limits', {})
+    E_mat   = float(material_cfg.get('E',   73.1e9))
+    rpm_val = float(operating_cfg.get('RPM', 30))
+    omega_v = rpm_val * 2.0 * 3.14159265 / 60.0
+    m_blk   = float(operating_cfg.get('P',   0.5))
+    mu_v    = float(operating_cfg.get('mu',  0.47))
+    g_v     = float(operating_cfg.get('g',   9.81))
+    nbuck_min = float(limits_cfg.get('n_buck_min',
+                      stress_cfg.get('n_buck_target', 3.0)))
+
     score_fn = _build_score_fn(
         model, scaler, target_stats, objectives, pass_threshold,
-        min_net_section=min_net_section, device=device,
+        min_net_section           = min_net_section,
+        n_buck_min                = nbuck_min,
+        E_material                = E_mat,
+        omega                     = omega_v,
+        m_block                   = m_blk,
+        mu                        = mu_v,
+        g                         = g_v,
+        penalty_net_section_scale = penalty_net_section_scale,
+        penalty_kinematic_scale   = penalty_kinematic_scale,
+        penalty_buckling_scale    = penalty_buckling_scale,
+        device                    = device,
     )
 
     logger.info("Running differential_evolution over %d-D space …", len(bounds))

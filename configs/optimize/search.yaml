@@ -42,6 +42,15 @@ objectives:
 constraints:
   pass_fail_prob_min: 0.90    # reject geometries with predicted pass probability < 90%
 
+  # Penalty scaling factors for each hard constraint violation.
+  # These multiply the raw violation magnitude before subtracting from score.
+  # net_section violation is in metres → needs large scale to be competitive with score.
+  # kinematic violation is in metres → moderate scale.
+  # buckling violation is dimensionless (FoS deficit) → no scaling needed.
+  penalty_net_section_scale: 1000.0
+  penalty_kinematic_scale:   100.0
+  penalty_buckling_scale:    1.0
+
 optimizer:
   method:         differential_evolution
   n_top_results:  10          # number of top-ranked geometries to report

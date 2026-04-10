@@ -23,7 +23,7 @@ features:
     - thickness_r
     - width_l
     - thickness_l
-    - pin_diameter_A
+    - d_shaft_A
     - pin_diameter_B
     - pin_diameter_C
   # Targets: pass_fail is the classification head; the rest are regression heads
@@ -36,6 +36,7 @@ features:
     - min_n_static      # derived: min(n_static_rod, n_static_crank, n_static_pin)
     - utilization
     - n_buck
+    - n_shaft
 
 # ---------------------------------------------------------------------------
 # Hyperparameter search space (Optuna samples from these ranges)
