@@ -7,11 +7,12 @@ Architecture
         │
     [Linear → BatchNorm → ReLU → Dropout] × N_layers   ← shared trunk
         │                   │
-    [Linear → Sigmoid]   [Linear (×7)]
+    [Linear → Sigmoid]   [Linear (×8)]
         │                   │
-    pass_fail (1)       regression targets (7):
+    pass_fail (1)       regression targets (8):
                             total_mass, volume_envelope, tau_A_max,
-                            E_rev, min_n_static, utilization, n_buck
+                            E_rev, min_n_static, utilization, n_buck,
+                            n_shaft
 
 The hidden layer widths, depth, dropout rate, and batch-norm flag are all
 configurable so that Optuna can search over them.
@@ -39,7 +40,7 @@ class CrankSliderSurrogate(nn.Module):
         self,
         input_dim:      int        = 10,
         hidden_sizes:   List[int]  = (256, 128, 64),
-        n_reg_targets:  int        = 7,
+        n_reg_targets:  int        = 8,
         dropout_rate:   float      = 0.1,
         use_batch_norm: bool       = True,
     ):

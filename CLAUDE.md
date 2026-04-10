@@ -223,6 +223,26 @@ constraints as penalty terms in the score function, in addition to the surrogate
 These were added after physics validation (`scripts/validate_candidate.py`) revealed that
 earlier optimizer outputs were kinematically infeasible or failed buckling.
 
+## Current ML Model State
+
+**Dataset:** last run — 10,000 rows, 7,526 pass (75.3%) / 2,474 fail (24.7%). Size will change; see `baseline.yaml`. Retraining after a dataset change requires only re-running `scripts/train_model.py` — no code changes needed.
+
+**Best trained surrogate** (`data/models/surrogate_best.pt`):
+- Val F1: **0.9713** | Architecture: `[256, 128, 64]` | Dropout: 0.299 | LR: 9.17e-3 | Batch: 128
+- 50 Optuna trials × 300 epochs max, patience=25
+
+**Architecture decisions already implemented:**
+- Early stopping saves on `val_f1 > best_val_f1` (not `val_loss`) — ensures best-classified epoch is saved, not best-regressed
+- `input_dim` and `n_reg_targets` derived from `len(F.INPUT_FEATURES)` / `len(F.REGRESSION_TARGETS)` in `train.py`; no hardcoded integers in the training path
+- `infer.py` asserts `ckpt['hparams']['n_reg_targets'] == len(F.REGRESSION_TARGETS)` at load time to catch stale checkpoints
+
+**Optimizer OOD penalty (ML-P2 — implemented):** Regression predictions that fall outside the training range by more than `ood_tolerance` (default 10%) are now penalised as `weight × ood_excess × ood_penalty_scale`. A prediction 3× the training max produces a deduction that completely dominates the score, eliminating that candidate. Both parameters are configurable in `configs/optimize/search.yaml` under `constraints`. Previously, OOD predictions were silently clamped to [0, 1], which was the root cause of the surrogate 0.97 → physics 0.48 gap on Rank 1 candidates.
+
+**Next recommended ML improvement (ML-P8 — Split regression training):**
+Train the classification head on all data (pass + fail) and the regression heads only on passing rows. Regression targets (mass, torque, safety factors) are physically meaningful only for passing designs; training on fail configs adds noise to the regression gradient. The pass_prob gate in the optimizer still requires the classifier to have seen both classes.
+
+---
+
 ## Physics Validation Script
 
 `scripts/validate_candidate.py` — runs a specific geometry dict through the full physics

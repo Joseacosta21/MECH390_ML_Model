@@ -53,6 +53,15 @@ class SurrogatePredictor:
     ):
         self.device = torch.device(device)
         ckpt        = load_checkpoint(checkpoint, device=device)
+
+        ckpt_n_reg = ckpt['hparams'].get('n_reg_targets')
+        if ckpt_n_reg != len(F.REGRESSION_TARGETS):
+            raise ValueError(
+                f"Checkpoint has n_reg_targets={ckpt_n_reg} but "
+                f"features.py defines {len(F.REGRESSION_TARGETS)} REGRESSION_TARGETS. "
+                "Re-train the model or restore a matching checkpoint."
+            )
+
         self.model  = build_model_from_hparams(ckpt['hparams'])
         self.model.load_state_dict(ckpt['model_state_dict'])
         self.model.eval()
@@ -100,7 +109,7 @@ class SurrogatePredictor:
         # Model outputs are normalised [0,1] — denormalise to physical units
         reg_vals = F.denormalize_targets(
             pred_reg.cpu().numpy(), self.target_stats
-        )  # (N, 7) in physical units
+        )  # (N, len(REGRESSION_TARGETS)) in physical units
 
         results = []
         for i in range(len(df)):
