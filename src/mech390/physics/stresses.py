@@ -212,8 +212,8 @@ def _rod_stresses(
     M_rod_max = w_rod_g * L**2 / 8.0
 
     # --- Axial body stress (Mother Doc Eq 4.6) — worst case (sum) ---
-    sigma_ax_body_B = (abs(F_r_B) / A_r ) + (abs(M_rod_max) * c_zr / I_zr)
-    sigma_ax_body_C = (abs(F_r_C) / A_r ) + (abs(M_rod_max) * c_zr / I_zr)
+    sigma_ax_body_B = (abs(F_r_B) / A_r) + (abs(M_rod_max) * c_zr / I_zr)
+    sigma_ax_body_C = (abs(F_r_C) / A_r) + (abs(M_rod_max) * c_zr / I_zr)
 
     # --- Axial hole stress (Mother Doc Eq 4.7) ---
     # Z_r,B = (w_rod - D_B_hole) * t_rod

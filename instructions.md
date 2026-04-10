@@ -572,6 +572,7 @@ Functions:
 | `train_model.py` | ✅ Complete | CLI: Optuna sweep → saves checkpoint + scaler to `data/models/` |
 | `optimize_design.py` | ✅ Complete | CLI: surrogate optimizer → top-N candidates via differential evolution |
 | `validate_candidate.py` | ✅ Complete | CLI: feeds exact 10-variable geometry dict to physics engine; bypasses Stage 1; prints full pass/fail report. Edit `CANDIDATE` at top of file. Args: `--config` |
+| `run_pipeline.py` | ✅ Complete | CLI: end-to-end orchestrator — runs generate → train → optimize in sequence. Args: `--generate-config`, `--train-config`, `--optimize-config`, `--seed`, `--out-dir`, `--skip-datagen`, `--skip-training`, `--log-level` |
 | `visualize_design.py` | 🔲 Planned | CLI: 2D mechanism drawing from `design_id`. Args: `--csv`, `--id`, `--angle`. ~130 lines |
 
 ---
