@@ -9,9 +9,11 @@ Usage
 
 import argparse
 import logging
+import random
 import sys
 from pathlib import Path
 
+import numpy as np
 import yaml
 
 # Ensure src/ is on the path when running from project root
@@ -20,12 +22,27 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 from mech390.ml.train import run_training
 
 
+def _seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        import torch
+        torch.manual_seed(seed)
+    except ImportError:
+        pass
+
+
 def _parse_args():
     p = argparse.ArgumentParser(description='Train the CrankSlider surrogate NN.')
     p.add_argument(
         '--config', '-c',
         default='configs/train/surrogate.yaml',
         help='Path to surrogate training config YAML (default: configs/train/surrogate.yaml)',
+    )
+    p.add_argument(
+        '--seed', '-s',
+        type=int, default=None,
+        help='Global random seed for reproducibility (overrides config seed if set).',
     )
     p.add_argument(
         '--log-level',
@@ -43,6 +60,9 @@ def main():
         format  = '%(asctime)s  %(levelname)-8s  %(name)s — %(message)s',
         datefmt = '%H:%M:%S',
     )
+
+    if args.seed is not None:
+        _seed_everything(args.seed)
 
     cfg_path = Path(args.config)
     if not cfg_path.exists():

@@ -5,6 +5,7 @@ Expands valid 2D mechanisms into multiple 3D variants with geometric constraints
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Iterable, Iterator, List
 
 import numpy as np
@@ -14,18 +15,20 @@ import math
 from mech390 import config as config_utils
 from mech390.datagen import sampling
 
+logger = logging.getLogger(__name__)
+
 _SUPPORTED_METHODS = {"random", "latin_hypercube"}
 _CONSTRAINT_TEXT = (
-    "width_r > pin_diameter_A + delta + 2*min_wall, "
-    "width_r > pin_diameter_B + delta + 2*min_wall, "
-    "width_l > pin_diameter_B + delta + 2*min_wall, "
-    "width_l > pin_diameter_C + delta + 2*min_wall"
+    "width_r > d_shaft_A + diametral_clearance_m + 2*min_wall, "
+    "width_r > pin_diameter_B + diametral_clearance_m + 2*min_wall, "
+    "width_l > pin_diameter_B + diametral_clearance_m + 2*min_wall, "
+    "width_l > pin_diameter_C + diametral_clearance_m + 2*min_wall"
 )
 
 # Parameters that use standard geometry resolution (resolution_mm)
 _GEO_PARAMS = {"width_r", "width_l", "thickness_r", "thickness_l"}
-# Parameters that use pin resolution (pin_resolution_mm)
-_PIN_PARAMS = {"pin_diameter_A", "pin_diameter_B", "pin_diameter_C"}
+# Parameters that use pin/shaft resolution (pin_resolution_mm)
+_PIN_PARAMS = {"d_shaft_A", "pin_diameter_B", "pin_diameter_C"}
 
 
 def _round_to_res(value: float, resolution_m: float) -> float:
@@ -60,7 +63,7 @@ def _passes_width_pin_constraints(
     width, causing ~TPa stress values via the net-section fallback in stresses.py.
     """
     return (
-        candidate["width_r"] - candidate["pin_diameter_A"] > min_net_section
+        candidate["width_r"] - candidate["d_shaft_A"]     > min_net_section
         and candidate["width_r"] - candidate["pin_diameter_B"] > min_net_section
         and candidate["width_l"] - candidate["pin_diameter_B"] > min_net_section
         and candidate["width_l"] - candidate["pin_diameter_C"] > min_net_section
@@ -133,7 +136,7 @@ def iter_expand_to_3d(
     # Net-section constraint: width - D_pin > min_net_section
     # min_net_section = delta + 2 * min_wall (ensures non-zero material around every hole)
     stress_cfg   = config.get("stress_analysis") or {}
-    delta_m      = float(stress_cfg.get("delta",       1e-4))
+    delta_m      = float(stress_cfg.get("diametral_clearance_m", 1e-4))
     min_wall_m   = float(stress_cfg.get("min_wall_mm", 0.5e-3))
     min_net_section = delta_m + 2.0 * min_wall_m
 
@@ -172,11 +175,10 @@ def iter_expand_to_3d(
                 break
 
         if accepted < n_variants_per_2d:
-            raise ValueError(
-                "Stage 2 could not generate enough feasible 3D variants for "
-                f"design index {design_idx}: accepted {accepted}/{n_variants_per_2d} "
-                f"after {max_attempts} attempts. Constraints: {_CONSTRAINT_TEXT}. "
-                f"Ranges: {param_ranges}."
+            logger.warning(
+                "Stage 2 design %d: only %d/%d variants accepted after %d attempts "
+                "(constraints: %s) — continuing with fewer variants.",
+                design_idx, accepted, n_variants_per_2d, max_attempts, _CONSTRAINT_TEXT,
             )
 
 

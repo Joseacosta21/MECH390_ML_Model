@@ -108,11 +108,24 @@ def load_checkpoint(path: str, device: str = 'cpu') -> dict:
 
 
 def build_model_from_hparams(hparams: dict) -> CrankSliderSurrogate:
-    """Reconstruct a model from the hparams dict saved in a checkpoint."""
+    """
+    Reconstruct a model from the hparams dict saved in a checkpoint.
+
+    Raises KeyError if any required key is missing, so that a stale or
+    incompatible checkpoint is caught at load time rather than silently
+    producing a model with wrong architecture.
+    """
+    _REQUIRED = ('hidden_sizes', 'dropout_rate', 'input_dim', 'n_reg_targets', 'use_batch_norm')
+    missing = [k for k in _REQUIRED if k not in hparams]
+    if missing:
+        raise KeyError(
+            f"build_model_from_hparams: checkpoint hparams missing required keys: {missing}. "
+            f"Present keys: {list(hparams.keys())}"
+        )
     return CrankSliderSurrogate(
-        input_dim      = hparams.get('input_dim',      10),
+        input_dim      = hparams['input_dim'],
         hidden_sizes   = hparams['hidden_sizes'],
-        n_reg_targets  = hparams.get('n_reg_targets',  7),
+        n_reg_targets  = hparams['n_reg_targets'],
         dropout_rate   = hparams['dropout_rate'],
-        use_batch_norm = hparams.get('use_batch_norm', True),
+        use_batch_norm = hparams['use_batch_norm'],
     )

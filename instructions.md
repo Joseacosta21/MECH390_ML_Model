@@ -7,39 +7,13 @@
 
 ---
 
-## 0. Agent rules (mandatory — read before anything else)
-
-**You must invoke at least one subagent from `CLAUDE.md` for any substantive task.**
-
-`CLAUDE.md` (project root) defines four subagents:
-- **Physics Validator** — for any physics file edit or equation question
-- **Cross-Reference Auditor** — for any signature change or cross-file consistency check
-- **Data Quality Checker** — after any data generation run
-- **ML Readiness Inspector** — before any training run
-
-Read `CLAUDE.md` now if you have not already done so.
-
-### Known bugs
-
-No confirmed open bugs. If a new issue is found, document it here with: file, line, description, and impact.
+> Agent rules are in [CLAUDE.md](CLAUDE.md). Physics derivations are in [The_Mother_Doc_v7.md](The_Mother_Doc_v7.md).
 
 ---
 
 ## 1. Scope of the project (authoritative)
 
-This repository defines a **complete physics-first pipeline** for:
-
-1. Synthesizing offset crank–slider mechanisms that satisfy **hard kinematic constraints**
-2. Expanding those mechanisms into **3D parametric geometries**
-3. Computing **dynamics and stresses** deterministically
-4. Labeling designs as **pass/fail**
-5. Training **machine learning models** on the resulting dataset
-6. Using trained models to **rapidly evaluate or optimize new designs**
-
-All results must be **reproducible**, **physically consistent**, and **traceable to configuration files**.
-
-This project is NOT exploratory scripting.  
-It is a structured simulation + ML system.
+This repository defines a **complete physics-first pipeline** for synthesizing offset crank–slider mechanisms, expanding them into 3D parametric geometries, computing dynamics and stresses deterministically, labeling designs as pass/fail, and training ML models for rapid design evaluation and optimization. All results must be **reproducible**, **physically consistent**, and **traceable to configuration files**. See [README.md](README.md) for the pipeline diagram.
 
 ---
 
@@ -104,60 +78,103 @@ Any design that violates these constraints is invalid and must never reach stres
 
 ---
 
-## 4. Two-stage pipeline (mandatory design)
+### 3.4 Mechanism geometry and coordinate system
 
-### Stage 1 — 2D kinematic synthesis and filtering
+This section is the authoritative reference for how the mechanism is oriented in space and how `volume_envelope` is computed. Read this before touching `generate.py` lines 452–466 or any code that uses `volume_envelope`.
 
-- Purpose: eliminate invalid mechanisms cheaply
-- Inputs: sampled geometry variables
-- Outputs: kinematically valid `(r, l, D)` tuples
+#### Coordinate frame
 
-Operations:
+```
+         y (+)
+         |
+         |   B (crank pin, traces circle of radius r)
+         |  /
+         | /  r
+         |/_________ x (+)   ← slider travel axis
+         A (crank pivot, origin)
+         |
+         |  e  (offset — slider guide is e BELOW the crank pivot)
+         |
+    ===================================  slider guide (y = −e)
+              C ──────────────► slider travels in +x
+```
 
-1. Pre-filter feasible `(l, e)` domain before sampling (avoid wasted draws):
-   - enforce `l > ROM/2 + eps`
-   - enforce `e < sqrt(l² − ROM²/4) − eps` (numerator positivity)
-2. Sample `(l, e)` pairs inside the constrained domain using `random` or `latin_hypercube`
-3. Solve for `r` using the closed-form ROM relation
-4. Apply branch-feasibility checks to reject extraneous analytical roots
-5. Evaluate optional user-defined constraint expressions from config
-6. Find dead-center crank angles via Brent root-finding
-7. Compute ROM and QRR from kinematics
-8. Accept only if both ROM tolerance (±0.5 mm) and QRR bounds are satisfied
+- **Origin**: crank pivot A at `(0, 0)`.
+- **x-axis**: slider travel direction (positive = extended).
+- **y-axis**: vertical, positive upward.
+- **z-axis**: out-of-plane (depth), positive toward viewer.
+- **Eccentricity `e`**: the slider guide runs at `y = −e`. The code's kinematic constraint absorbs this as the `(r·sinθ + e)` term in the rod-angle formula; `pos_C` is reported as `[x_C, 0]` with the offset implicit.
 
-**`n_samples` = target number of VALID designs to yield.**  
-Candidates are generated in batches until exactly `n_samples` valid designs are produced
-or the draw budget (`n_attempts`) is exhausted. This guarantees the dataset size
-regardless of how many candidates are rejected.
+#### Assembly cross-section (z-axis view, looking from +z toward the mechanism)
 
-NO dynamics. NO stresses.
+The three bodies stack in z in the following order, centred on the slider guide plane:
+
+```
+z  →  more positive (toward viewer)
+
+|← max(t_r, (t_s−t_l)/2) →|←── t_l/2 ──→|←── t_s/2 ──→|
+|                           |              |              |
+|      R (crank)            | L (rod)      | S (slider)   |
+|                           |              |              |
+                            ↑
+                     contact plane
+                  (R and L touch here;
+                   L and S share centreline)
+```
+
+- **R (crank)** and **L (rod)** touch face-to-face. Their contact plane is the z-reference.
+- **L (rod)** and **S (slider block)** share the same z-centreline. Each protrudes `t_l/2` and `t_s/2` respectively to the right of the contact plane.
+- **Left of the contact plane**: either R (`t_r`) or the slider overhang `(t_s − t_l)/2` — whichever is larger.
+
+#### Bounding box dimensions
+
+**T — out-of-plane depth (z-axis)**
+
+```
+T = (t_l + t_s)/2  +  max(t_r, (t_s − t_l)/2)
+```
+
+- Right of contact plane: `(t_l + t_s)/2` — half of L plus half of S (both centred on same line).
+- Left of contact plane: `max(t_r, (t_s − t_l)/2)` — crank thickness or slider overhang, whichever protrudes more.
+- Note: `pin_diameter_A` does NOT contribute to T — the pin sits inside the crank bore and does not add to the bounding box depth.
+
+Code (`generate.py:453`):
+```python
+_T = (_tl + _s_h) / 2.0 + max(_tr, (_s_h - _tl) / 2.0)
+```
+
+**H — vertical extent (y-axis)**
+
+```
+H = r  +  max(r, e + s_h/2)
+```
+
+- Top: crank pin B reaches `y = +r` (at θ = 90°).
+- Bottom: lower of crank pin at `y = −r` (at θ = 270°) OR slider block bottom at `y = −(e + s_h/2)`.
+- `max` selects whichever reaches further below the crank pivot.
+
+Code (`generate.py:454`):
+```python
+_H = _r + max(_r, _e + _s_h / 2.0)
+```
+
+**L — horizontal extent (x-axis)**
+
+```
+L = r  +  √((r + l)² − e²)  +  s_l/2
+```
+
+- Left: crank pin B reaches `x = −r` (at θ = 180°).
+- Right: slider pin C at maximum extension. When the crank and rod are collinear and the slider guide is at perpendicular distance `e` from A, the horizontal reach of C from A is `√((r+l)² − e²)`. The slider block adds `s_l/2` beyond pin C.
+
+Code (`generate.py:455`):
+```python
+_L = _r + np.sqrt(max((_r + _l)**2 - _e**2, 0.0)) + _s_l / 2.0
+```
 
 ---
 
-### Stage 2 — 3D embodiment, dynamics, and stress
-
-- Purpose: evaluate structural feasibility
-- Inputs: valid 2D mechanisms
-- Outputs: stress metrics + pass/fail labels
-
-Operations:
-
-1. Generate multiple 3D geometry variants for each valid 2D mechanism (controlled by `sampling.n_variants_per_2d`)
-2. Sample widths, thicknesses, and pin diameters using the method in `sampling.method`
-3. Enforce Stage-2 geometric constraints:
-   - `width_r > pin_diameter_A`
-   - `width_r > pin_diameter_B`
-   - `width_l > pin_diameter_B`
-   - `width_l > pin_diameter_C`
-4. Compute mass and inertia properties via `mass_properties.compute_design_mass_properties`
-5. Evaluate dynamics every 15° using a Newton–Euler 8×8 linear solve that returns:
-   - `F_A`, `F_B`, `F_C` (joint reactions as `np.ndarray([Fx, Fy])`)
-   - `N`, `F_f` (slider normal + kinetic Coulomb friction)
-   - `tau_A` (required crank torque)
-   - compatibility alias `F_O = F_A`
-6. Compute stresses via `stresses.py` (axial, bending, torsion, shear at body and hole locations for rod, crank, and pin)
-7. Track maximum stress values over the full crank cycle
-8. Apply pass/fail criteria using `sigma_limit = S_y / safety_factor` and `tau_limit = 0.577 * S_y / safety_factor` (Von Mises shear yield)
+> Pipeline overview: see [README.md §2](README.md). Full constraint derivations: see [The_Mother_Doc_v7.md](The_Mother_Doc_v7.md).
 
 ---
 
@@ -415,7 +432,7 @@ Configuration loading is responsible for numeric normalization (including scient
 - `pin_stresses(theta, design, dynamics_result)` → dict of per-angle pin σ and τ
 - Saint-Venant torsion: `τ = T / (β·b·c²)` where `b = max(w,t)`, `c = min(w,t)` (Roark/Shigley)
 - Axial hole stress: `σ = Kt_lug · F / ((w − D_hole) · t)` with `D_hole = D_pin + delta`
-- Known issue: `max(w − D_hole, 1e-9)` fallback produces unphysical stress magnitudes (~TPa) when pin nearly fills the link width; affected rows are correctly labeled as failures
+- The `1e-9` floor in the net-section denominator is no longer reachable in practice: Stage 2 rejects any geometry where `width - D_pin <= delta + 2·min_wall` before physics evaluation
 
 #### `fatigue.py` ✅ Implemented
 
@@ -459,13 +476,13 @@ Configuration loading is responsible for numeric normalization (including scient
 - Internal: pre-feasibility constrained `(l,e)` sampling; rounding to `resolution_mm` for `l`, `e`, `r`; optional constraint expression evaluation
 - `_round_to_res(value, resolution_m)` — rounds to nearest multiple of `resolution_m`, then applies `round(raw, decimal_places)` to eliminate binary float noise
 
-#### `stage2_embodiment.py` ✅ Implemented (stubs for mass props + stresses)
+#### `stage2_embodiment.py` ✅ Implemented
 
 - `iter_expand_to_3d(valid_2d_designs, config)` → streaming iterator of 3D variants
 - `expand_to_3d(valid_2d_designs, config)` → list wrapper
-- Width/pin feasibility enforced: `width_r > pin_diameter_A/B`, `width_l > pin_diameter_B/C`
+- Net-section feasibility enforced: `width - D_pin > delta + 2·min_wall` for all four pin pairs; `delta` and `min_wall` read from `config.stress_analysis`
 - Rounding applied BEFORE constraint check: widths/thicknesses to `resolution_mm`, pin diameters to `pin_resolution_mm`
-- `_round_to_res(value, resolution_m)` — same noise-free implementation as Stage 1
+- `_round_to_res(value, resolution_m)` — noise-free rounding using decimal-place inference
 - Seed diversification: `design_seed = base_seed + design_idx * 9973`
 - Mass properties computed via `compute_design_mass_properties`; injected into design dict before engine call
 
@@ -496,10 +513,10 @@ Configuration loading is responsible for numeric normalization (including scient
 | `preview_stage1.py` | ✅ Complete | CLI: runs Stage 1, streams to CSV. Args: `--config`, `--seed`, `--out-dir` |
 | `preview_stage2.py` | ✅ Complete | CLI: runs Stage 1 → Stage 2, computes mass properties, streams 27-column CSV. Args: `--config`, `--seed`, `--out-dir`, `--max-2d` |
 | `preview_forces.py` | ✅ Complete | CLI: full pipeline → per-angle force sweep CSV (4800 rows). Args: `--config`, `--seed`, `--out-dir`, `--max-2d` |
-| `debug_stage1.py` | ✅ Complete | Quick debug runner using baseline config; prints first 5 designs + stats |
 | `generate_dataset.py` | ✅ Complete | CLI: full pipeline → 7 CSVs. Args: `--config`, `--seed`, `--out-dir` |
 | `train_model.py` | ✅ Complete | CLI: Optuna sweep → saves checkpoint + scaler to `data/models/` |
 | `optimize_design.py` | ✅ Complete | CLI: surrogate optimizer → top-N candidates via differential evolution |
+| `validate_candidate.py` | ✅ Complete | CLI: feeds exact 10-variable geometry dict to physics engine; bypasses Stage 1; prints full pass/fail report. Edit `CANDIDATE` at top of file. Args: `--config` |
 | `visualize_design.py` | 🔲 Planned | CLI: 2D mechanism drawing from `design_id`. Args: `--csv`, `--id`, `--angle`. ~130 lines |
 
 ---
@@ -529,32 +546,6 @@ Never hard-code paths to this directory.
 
 ---
 
-### `reports/`
-
-**Purpose:** Diagnostics and summaries.
-
-```
-reports/
-├─ data_generation/
-├─ training/
-└─ optimization/
-```
-
----
-
-## 10. Expected usage pattern
-
-1. Define or choose a generation config in `configs/generate/`
-2. Run Stage 1 preview: `python scripts/preview_stage1.py --config configs/generate/baseline.yaml`
-3. Run full dataset generation: `python scripts/generate_dataset.py --config configs/generate/baseline.yaml --out-dir data/preview`
-4. Inspect summary reports
-5. Train ML model: `python scripts/train_model.py --config configs/train/surrogate.yaml`
-6. Use ML for rapid evaluation or optimization: `python scripts/optimize_design.py --generate-config configs/generate/baseline.yaml --optimize-config configs/optimize/search.yaml --model data/models/<checkpoint>`
-
-All steps are repeatable and configuration-driven.
-
----
-
 ## 11. Determinism and reproducibility rules
 
 - All physics functions must be deterministic
@@ -568,45 +559,3 @@ All steps are repeatable and configuration-driven.
 ## 12. Repository rules
 
 - **Empty Directories (`.gitkeep`):** Git does not track empty directories. Placeholder `.gitkeep` files are used locally to enforce folder structures (e.g. `data/models/`). **Rule:** When you add a new file to a directory that only has a `.gitkeep`, you MUST remove the `.gitkeep` file.
-
----
-
-## 13. Outstanding work (not yet implemented)
-
-### Known bugs
-
-| Bug | File | Status |
-|---|---|---|
-| `omega` + mass props not injected before `engine.evaluate_design()` | `generate.py` | ✅ Fixed |
-| Sign error on `alpha2` in `rod_angular_acceleration` | `kinematics.py:290` | ✅ Fixed — `bugfix/physics_corrections` |
-| Hole offset approximation in `link_mass_moi_cg_z` | `mass_properties.py:208–209` | ✅ Fixed — `bugfix/physics_corrections` |
-| Rod torsion denominator used `β·w²·t` instead of `β·b·c²`; torsion not sorted for `t > w` | `stresses.py:235–241, 372–380` | ✅ Fixed |
-| No post-rounding uniqueness check in Stage 2 | `stage2_embodiment.py` | ⚠️ Open |
-| Net-section fallback `1e-9` produces ~TPa stresses when pin diameter ≥ link width | `stresses.py:218, 256, 358, 399` | ⚠️ Open — labels correct; fix: reject in Stage 2 |
-
-### Unimplemented features
-
-| Item | Location | Notes |
-|---|---|---|
-| Full surrogate training run | `scripts/train_model.py` | Smoke-tested only (3 trials × 20 epochs); needs 50 × 300 |
-| Regression quality validation | — | Target: val R² > 0.85, F1 > 0.90 |
-| Sensitivity / correlation plots | — | Week 8 deliverable |
-| `configs/generate/aggressive.yaml` | `configs/generate/` | Empty — wider ranges not yet defined |
-| 2D mechanism visualizer | `scripts/visualize_design.py` | CLI: `--csv`, `--id`, `--angle`; draws crank/rod/slider with cross-sections, pin circles, guide rail; annotates pass/fail + key metrics; ~130 lines |
-
----
-
-## 14. Final contract statement
-
-This document defines:
-
-- all constraints
-- all variables
-- all equations
-- all file responsibilities
-- all expected behaviors
-- the current implementation status of every module
-
-Any implementation that follows this document is considered correct.
-
-No assumptions beyond what is written here are allowed.

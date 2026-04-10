@@ -21,10 +21,6 @@ def sample_scalar(range_def: Union[Dict, List, float, int], seed: Optional[int] 
     Returns:
         float: Sampled value.
     """
-    if seed is not None:
-        random.seed(seed)
-        np.random.seed(seed)
-        
     if isinstance(range_def, dict):
         if 'min' in range_def and 'max' in range_def:
             return random.uniform(range_def['min'], range_def['max'])

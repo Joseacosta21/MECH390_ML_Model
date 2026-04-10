@@ -160,7 +160,7 @@ class TestKinematicsAndDatagen(unittest.TestCase):
         width_l_range = config["geometry"]["widths"]["width_l"]
         thickness_r_range = config["geometry"]["thicknesses"]["thickness_r"]
         thickness_l_range = config["geometry"]["thicknesses"]["thickness_l"]
-        pin_a_range = config["geometry"]["pin_diameters"]["pin_diameter_A"]
+        pin_a_range = config["geometry"]["pin_diameters"]["d_shaft_A"]
         pin_b_range = config["geometry"]["pin_diameters"]["pin_diameter_B"]
         pin_c_range = config["geometry"]["pin_diameters"]["pin_diameter_C"]
 
@@ -173,11 +173,11 @@ class TestKinematicsAndDatagen(unittest.TestCase):
             self.assertTrue(width_l_range["min"] <= row["width_l"] <= width_l_range["max"])
             self.assertTrue(thickness_r_range["min"] <= row["thickness_r"] <= thickness_r_range["max"])
             self.assertTrue(thickness_l_range["min"] <= row["thickness_l"] <= thickness_l_range["max"])
-            self.assertTrue(pin_a_range["min"] <= row["pin_diameter_A"] <= pin_a_range["max"])
+            self.assertTrue(pin_a_range["min"] <= row["d_shaft_A"] <= pin_a_range["max"])
             self.assertTrue(pin_b_range["min"] <= row["pin_diameter_B"] <= pin_b_range["max"])
             self.assertTrue(pin_c_range["min"] <= row["pin_diameter_C"] <= pin_c_range["max"])
 
-            self.assertGreater(row["width_r"], row["pin_diameter_A"])
+            self.assertGreater(row["width_r"], row["d_shaft_A"])
             self.assertGreater(row["width_r"], row["pin_diameter_B"])
             self.assertGreater(row["width_l"], row["pin_diameter_B"])
             self.assertGreater(row["width_l"], row["pin_diameter_C"])
@@ -197,7 +197,7 @@ class TestKinematicsAndDatagen(unittest.TestCase):
                 "width_l": baseline["geometry"]["widths"]["width_l"],
                 "thickness_r": baseline["geometry"]["thicknesses"]["thickness_r"],
                 "thickness_l": baseline["geometry"]["thicknesses"]["thickness_l"],
-                "pin_diameter_A": baseline["geometry"]["pin_diameters"]["pin_diameter_A"],
+                "d_shaft_A": baseline["geometry"]["pin_diameters"]["d_shaft_A"],
                 "pin_diameter_B": baseline["geometry"]["pin_diameters"]["pin_diameter_B"],
                 "pin_diameter_C": baseline["geometry"]["pin_diameters"]["pin_diameter_C"],
             },
@@ -214,7 +214,7 @@ class TestKinematicsAndDatagen(unittest.TestCase):
         config["sampling"]["stage2_max_attempts_per_2d"] = 200
         config["geometry"]["widths"]["width_r"] = {"min": 0.01, "max": 0.01}
         config["geometry"]["widths"]["width_l"] = {"min": 0.01, "max": 0.01}
-        config["geometry"]["pin_diameters"]["pin_diameter_A"] = {"min": 0.02, "max": 0.02}
+        config["geometry"]["pin_diameters"]["d_shaft_A"] = {"min": 0.02, "max": 0.02}
         config["geometry"]["pin_diameters"]["pin_diameter_B"] = {"min": 0.02, "max": 0.02}
         config["geometry"]["pin_diameters"]["pin_diameter_C"] = {"min": 0.02, "max": 0.02}
 
@@ -233,7 +233,7 @@ class TestKinematicsAndDatagen(unittest.TestCase):
                     "width_l": 0.02,
                     "thickness_r": 0.015,
                     "thickness_l": 0.015,
-                    "pin_diameter_A": 0.01,
+                    "d_shaft_A": 0.01,
                     "pin_diameter_B": 0.01,
                     "pin_diameter_C": 0.01,
                 },
@@ -245,7 +245,7 @@ class TestKinematicsAndDatagen(unittest.TestCase):
                     "width_l": 0.019,
                     "thickness_r": 0.014,
                     "thickness_l": 0.014,
-                    "pin_diameter_A": 0.01,
+                    "d_shaft_A": 0.01,
                     "pin_diameter_B": 0.01,
                     "pin_diameter_C": 0.01,
                 },
@@ -396,7 +396,7 @@ class TestKinematicsAndDatagen(unittest.TestCase):
             "width_l": 0.017,
             "thickness_r": 0.012,
             "thickness_l": 0.011,
-            "pin_diameter_A": 0.010,
+            "d_shaft_A": 0.010,
             "pin_diameter_B": 0.010,
             "pin_diameter_C": 0.009,
         }

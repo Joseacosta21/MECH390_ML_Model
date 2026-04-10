@@ -169,11 +169,11 @@ def get_stage2_param_ranges(config: Dict[str, Any]) -> Dict[str, Dict[str, float
             fallback_key="thickness_l",
             path_hint="geometry.thicknesses",
         ),
-        "pin_diameter_A": _first_present_range(
+        "d_shaft_A": _first_present_range(
             primary=pin_diameters,
-            primary_key="pin_diameter_A",
+            primary_key="d_shaft_A",
             fallback=geometry,
-            fallback_key="pin_diameter_A",
+            fallback_key="d_shaft_A",
             path_hint="geometry.pin_diameters",
         ),
         "pin_diameter_B": _first_present_range(
