@@ -63,7 +63,9 @@ def _train_one_trial(
     Train a single model with given hparams; return best val_f1.
     """
     model = CrankSliderSurrogate(
+        input_dim      = len(F.INPUT_FEATURES),
         hidden_sizes   = hparams['hidden_sizes'],
+        n_reg_targets  = len(F.REGRESSION_TARGETS),
         dropout_rate   = hparams['dropout_rate'],
         use_batch_norm = cfg['model'].get('use_batch_norm', True),
     ).to(device)
@@ -85,7 +87,6 @@ def _train_one_trial(
     best_val_f1   = 0.0
     best_state    = None
     no_improve    = 0
-    best_val_loss = float('inf')
 
     for epoch in range(max_epochs):
         # --- Train ---
@@ -124,11 +125,13 @@ def _train_one_trial(
         recall    = tp / (tp + fn + 1e-8)
         val_f1    = 2 * precision * recall / (precision + recall + 1e-8)
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            best_val_f1   = val_f1
-            best_state    = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-            no_improve    = 0
+        # Early stopping on val_f1 (the Optuna objective), not val_loss.
+        # Saving on val_loss can discard the best-classified epoch when
+        # regression MSE continues to fall after F1 has already peaked.
+        if val_f1 > best_val_f1:
+            best_val_f1 = val_f1
+            best_state  = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            no_improve  = 0
         else:
             no_improve += 1
             if no_improve >= patience:
@@ -266,7 +269,9 @@ def run_training(cfg: Dict[str, Any]) -> None:
         optimizer_state= None,
         epoch          = -1,
         val_f1         = best_val_f1,
-        hparams        = {**best_hparms, 'input_dim': 10, 'n_reg_targets': 7,
+        hparams        = {**best_hparms,
+                          'input_dim':      len(F.INPUT_FEATURES),
+                          'n_reg_targets':  len(F.REGRESSION_TARGETS),
                           'use_batch_norm': cfg['model'].get('use_batch_norm', True)},
         path           = ckpt_path,
     )

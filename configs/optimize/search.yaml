@@ -51,6 +51,21 @@ constraints:
   penalty_kinematic_scale:   100.0
   penalty_buckling_scale:    1.0
 
+  # Out-of-distribution (OOD) penalty.
+  # When a surrogate regression prediction falls outside the training data range,
+  # the optimizer previously treated it as a free maximum score (silent clip to [0,1]).
+  # These parameters penalise designs whose predictions extrapolate beyond the
+  # training distribution, discouraging the optimizer from exploiting OOD regions.
+  #
+  # ood_tolerance:    Fractional grace band beyond [0, 1] before penalty applies.
+  #                   0.1 = 10% of the training range is allowed before penalising.
+  # ood_penalty_scale: Per-unit penalty multiplier, scaled by objective weight.
+  #                   10.0 means a full-weight (w=1.0) objective that extrapolates
+  #                   1 full training-range beyond the band loses 10× its weight
+  #                   from the score — effectively eliminating that candidate.
+  ood_tolerance:     0.1
+  ood_penalty_scale: 10.0
+
 optimizer:
   method:         differential_evolution
   n_top_results:  10          # number of top-ranked geometries to report
