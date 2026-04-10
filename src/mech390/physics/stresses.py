@@ -17,7 +17,7 @@ Mother Doc notation -> code variable mapping:
   t_crank   = design['thickness_r']     (crank thickness, out-of-plane)
   l_rod     = design['l']               (rod length / centre distance)
   L_crank   = design['r']               (crank arm length / centre distance)
-  D_pA      = design['pin_diameter_A']
+  d_shaft_A = design['d_shaft_A']
   D_pB      = design['pin_diameter_B']
   D_pC      = design['pin_diameter_C']
   I_yr (rod Iyy)   = design['I_area_rod_yy']    = w_l * t_l^3 / 12
@@ -58,12 +58,9 @@ import numpy as np
 from mech390.physics import kinematics
 from mech390.physics._utils import get_or_warn
 
-# ---------------------------------------------------------------------------
-# Fallback defaults (overridden by config via design dict)
-# ---------------------------------------------------------------------------
-_DELTA_DEFAULT: float = 1e-4   # diametral clearance (m) — baseline.yaml stress_analysis.delta
-_KT_LUG_DEFAULT: float = 2.34  # lug Kt — baseline.yaml stress_analysis.Kt_lug
-_KT_HOLE_TORSION_DEFAULT: float = 4.0  # hole torsion Kt — baseline.yaml stress_analysis.Kt_hole_torsion
+# No module-level defaults for config-sourced constants.
+# delta, Kt_lug, Kt_hole_torsion must be present in the design dict
+# (injected from baseline.yaml). Missing keys raise KeyError.
 
 # ---------------------------------------------------------------------------
 # Saint-Venant torsion coefficient (Roark approximation)
@@ -180,10 +177,17 @@ def _rod_stresses(
     g    = get_or_warn(design, 'g', 9.81, context=_ctx)
     m_rod = get_or_warn(design, 'mass_rod', 0.0, context=_ctx)
 
-    # Configurable stress-analysis constants (from baseline.yaml via design dict)
-    delta    = get_or_warn(design, 'delta', _DELTA_DEFAULT, context=_ctx)
-    Kt_lug   = get_or_warn(design, 'Kt_lug', _KT_LUG_DEFAULT, context=_ctx)
-    Kt_hole  = get_or_warn(design, 'Kt_hole_torsion', _KT_HOLE_TORSION_DEFAULT, context=_ctx)
+    # Configurable stress-analysis constants — must be injected from baseline.yaml
+    try:
+        delta   = float(design['delta'])
+        Kt_lug  = float(design['Kt_lug'])
+        Kt_hole = float(design['Kt_hole_torsion'])
+    except KeyError as exc:
+        raise KeyError(
+            f"stresses._rod_stresses: required key {exc} missing from design dict. "
+            f"Ensure generate.py / validate_candidate.py injects all stress_analysis "
+            f"constants from baseline.yaml before calling engine.evaluate_design()."
+        ) from exc
 
     # i_offset: out-of-plane offset at Pin B joint (Mother Doc)
     i_offset = (design['thickness_l'] + design['thickness_r']) / 2.0
@@ -208,8 +212,8 @@ def _rod_stresses(
     M_rod_max = w_rod_g * L**2 / 8.0
 
     # --- Axial body stress (Mother Doc Eq 4.6) — worst case (sum) ---
-    sigma_ax_body_B = abs(F_r_B) / A_r + abs(M_rod_max) * c_zr / I_zr
-    sigma_ax_body_C = abs(F_r_C) / A_r + abs(M_rod_max) * c_zr / I_zr
+    sigma_ax_body_B = (abs(F_r_B) / A_r ) + (abs(M_rod_max) * c_zr / I_zr)
+    sigma_ax_body_C = (abs(F_r_C) / A_r ) + (abs(M_rod_max) * c_zr / I_zr)
 
     # --- Axial hole stress (Mother Doc Eq 4.7) ---
     # Z_r,B = (w_rod - D_B_hole) * t_rod
@@ -220,22 +224,28 @@ def _rod_stresses(
     sigma_ax_hole_B = Kt_lug * abs(F_r_B) / Z_r_B
     sigma_ax_hole_C = Kt_lug * abs(F_r_C) / Z_r_C
 
-    # --- Out-of-plane bending stress at Pin B (Mother Doc Eq 5.5) ---
-    # M_eta,rod,B = F_r,rod,B * i_offset
-    # sigma_oop = M_eta * c_yr / I_yr
+    # --- Critical Point 2: out-of-plane extreme fibre (η=0, ζ=±c_r/2) ---
+    # The governing combined-stress location on the rod cross-section:
+    #   · OOP bending (from i_offset at B) is maximum here — extreme OOP fibre
+    #   · Saint-Venant τ_T_max also peaks here — midpoint of longer face (Roark)
+    #   · In-plane transverse shear τ_V also peaks here — τ_xη is uniform in ζ,
+    #     maximum at η=0 (neutral axis for in-plane loading)
+    # Full normal stress at Point 2 = axial + OOP bending (no in-plane bending at η=0).
+    # Compare with sigma_ax_body_{B,C} (Point 1: axial + in-plane bending at η=±w/2).
     M_eta_rod_B = abs(F_r_B) * i_offset
-    sigma_oop_rod_B = M_eta_rod_B * c_yr / I_yr
+    sigma_body_B_pt2 = (abs(F_r_B) / A_r) + (M_eta_rod_B * c_yr / I_yr)
 
     # --- Torsion (Mother Doc Sections 5.5 / 5.6) ---
     # T_rod = F_t,rod,C * i_offset  (Eq 5.6)
     T_rod = abs(F_t_C) * i_offset
-    # Saint-Venant: tau_max = T / (beta * b * c^2), b >= c (Shigley's/Roark Table 10.7)
-    # Sort so b is always the longer dimension — either w or t depending on design.
+    # Saint-Venant: τ_max = T / (β·b·c²), b = max(w,t), c = min(w,t)  (Roark Table 10.7).
+    # c is ALWAYS min(w,t) regardless of torsion direction; torsion direction only affects sign.
+    # τ_T_max occurs at (η=0, ζ=±c_r/2) — midpoint of the longer face.
     b_r = max(w, t)
     c_r = min(w, t)
     beta_r = _beta_torsion(b_r, c_r)
 
-    # tau_T,rod body (Eq 5.8)
+    # tau_T,rod body — maximum at Point 2 (η=0, ζ=±c_r/2)
     tau_T_rod_body = T_rod / (beta_r * b_r * c_r**2)
 
     # tau_nom,hole at Pin B and C (Eq 5.9)
@@ -248,32 +258,39 @@ def _rod_stresses(
     tau_max_hole_B = Kt_hole * tau_nom_hole_B
     tau_max_hole_C = Kt_hole * tau_nom_hole_C
 
-    # --- Transverse shear (Mother Doc Eq 4.8) ---
-    tau_xy_B = abs(F_t_B) / A_r
-    tau_xy_C = abs(F_t_C) / A_r
+    # --- Transverse shear at Point 2 (Mother Doc Eq 4.8; corrected) ---
+    # For a rectangular section, τ_xη(η) is uniform across ζ; peak = (3/2)·F_t/A at η=0
+    # (Mott Sec. 13-2; Shigley Sec. 3-11).  At Point 2 (η=0) this is the maximum transverse
+    # shear, acting in the η-direction — SAME direction as τ_T_max at that point.
+    # → τ_T and τ_V ADD at Point 2; they must not be compared with max().
+    tau_V_rod = 1.5 * max(abs(F_t_B), abs(F_t_C)) / A_r
+    tau_body_crit = tau_T_rod_body + tau_V_rod   # combined critical shear at Point 2
 
     # --- Smallest-area lug shear (Mother Doc Eq 4.9) ---
+    # Net-section lug shear uses F_t/A_net (no 3/2; standard lug analysis nominal shear).
     denom_B = max(w - D_B_hole, 1e-9) * t
     denom_C = max(w - D_C_hole, 1e-9) * t
     tau_sma_B = abs(F_t_B) / denom_B
     tau_sma_C = abs(F_t_C) / denom_C
 
     # --- Collect worst-case ---
-    # sigma_ax_body already includes M_rod_max bending; sigma_grav not listed separately
+    # sigma: Point 1 (η=±w/2) → sigma_ax_body = axial + in-plane bending
+    #        Point 2 (η=0, ζ=±c_r/2) → sigma_body_B_pt2 = axial + OOP bending
     sigma_rod = max(
         sigma_ax_body_B,
         sigma_ax_body_C,
         sigma_ax_hole_B,
         sigma_ax_hole_C,
-        sigma_oop_rod_B,
+        sigma_body_B_pt2,
     )
 
+    # tau: tau_body_crit = τ_T + τ_V summed at Point 2 (same location, same direction)
+    #      tau_max_hole_* = torsion-dominated at holes with Kt (τ_V secondary at holes)
+    #      tau_sma_* = net-section lug shear (no 3/2; lug analysis convention)
     tau_rod = max(
-        tau_T_rod_body,
+        tau_body_crit,
         tau_max_hole_B,
         tau_max_hole_C,
-        tau_xy_B,
-        tau_xy_C,
         tau_sma_B,
         tau_sma_C,
     )
@@ -295,13 +312,14 @@ def _crank_stresses(
     Compute worst-case normal and shear stress in the crank arm at one
     crank angle theta.
 
-    Covers (Mother Doc Section 6):
+    Covers (Mother Doc Section 6, corrected):
       - Axial body stress at Pin A and B ends           (sigma_ax,crank,body)
       - Axial hole stress at Pin A and B                (sigma_ax,crank,hole)
       - Gravity-induced peak bending stress             (sigma from M_crank,max)
-      - Out-of-plane bending stress at Pin B            (sigma_oop,crank,B)
-      - Torsional shear from T_in and T_offset          (tau_T,in, tau_T,offset)
-      - Transverse shear stress                         (tau from F_t)
+      - T_in in-plane bending at section A              (sigma_ax,body_A includes T_in term)
+      - Out-of-plane bending at Pin B — Point 2         (sigma_body_B_pt2 = axial + OOP bending)
+      - Torsional shear from T_offset only              (tau_T,offset; T_in is NOT bar torsion)
+      - Transverse shear + torsion combined at Point 2  (tau_body_crit = tau_T + (3/2)F_t/A)
       - Smallest-area lug shear at Pin A and B          (tau_sma)
 
     Returns:
@@ -311,7 +329,7 @@ def _crank_stresses(
     w    = design['width_r']         # crank width (in-plane)
     t    = design['thickness_r']     # crank thickness (out-of-plane)
     L    = design['r']               # crank arm length (centre distance)
-    D_pA = design['pin_diameter_A']
+    d_shaft_A = design['d_shaft_A']
     D_pB = design['pin_diameter_B']
     I_yc = design['I_area_crank_yy'] # w*t^3/12 — out-of-plane bending (weak axis)
     I_zc = design['I_area_crank_zz'] # t*w^3/12 — in-plane bending (strong axis)
@@ -322,10 +340,17 @@ def _crank_stresses(
     g    = get_or_warn(design, 'g', 9.81, context=_ctx)
     m_crank = get_or_warn(design, 'mass_crank', 0.0, context=_ctx)
 
-    # Configurable stress-analysis constants (from baseline.yaml via design dict)
-    delta    = get_or_warn(design, 'delta', _DELTA_DEFAULT, context=_ctx)
-    Kt_lug   = get_or_warn(design, 'Kt_lug', _KT_LUG_DEFAULT, context=_ctx)
-    Kt_hole  = get_or_warn(design, 'Kt_hole_torsion', _KT_HOLE_TORSION_DEFAULT, context=_ctx)
+    # Configurable stress-analysis constants — must be injected from baseline.yaml
+    try:
+        delta   = float(design['delta'])
+        Kt_lug  = float(design['Kt_lug'])
+        Kt_hole = float(design['Kt_hole_torsion'])
+    except KeyError as exc:
+        raise KeyError(
+            f"stresses._crank_stresses: required key {exc} missing from design dict. "
+            f"Ensure generate.py / validate_candidate.py injects all stress_analysis "
+            f"constants from baseline.yaml before calling engine.evaluate_design()."
+        ) from exc
 
     # i_offset: out-of-plane offset at Pin B joint (Mother Doc)
     i_offset = (design['thickness_l'] + design['thickness_r']) / 2.0
@@ -343,47 +368,52 @@ def _crank_stresses(
     )
 
     # --- Gravity distributed bending (Mother Doc Section 6.1) ---
-    # w_crank,g = (m_crank * g / L_crank) * cos(theta)
-    # M_crank,max = w_crank,g * L_crank^2 / 8
     w_crank_g = (m_crank * g / L) * math.cos(theta)
     M_crank_max = w_crank_g * L**2 / 8.0
 
-    # --- Axial body stress (Mother Doc Eq 6.7) — worst case (sum) ---
+    # --- Axial body stress (Mother Doc Eq 6.7) ---
+    # Point 1 (η=±w/2, ζ=0): in-plane extreme fibre — axial + in-plane bending.
     sigma_ax_body_B = abs(F_r_crank_B) / A_c + abs(M_crank_max) * c_zc / I_zc
-    sigma_ax_body_A = abs(F_r_crank_A) / A_c + abs(M_crank_max) * c_zc / I_zc
+    # At section A: T_in enters as in-plane bending, NOT Saint-Venant bar torsion.
+    #   T_in = T_in·ẑ;  bar axis ê₁ = (cosθ, sinθ, 0);  T_in·ẑ·ê₁ = 0  → zero bar torsion.
+    #   T_in·ẑ·ẑ = T_in → in-plane bending moment M_A = T_in at section A (zero at B).
+    #   σ = M·c_z/I_zc = T_in·(w/2) / (t·w³/12) = 6·T_in / (t·w²).
+    sigma_ax_body_A = (abs(F_r_crank_A) / A_c
+                       + abs(M_crank_max) * c_zc / I_zc
+                       + abs(T_in) * c_zc / I_zc)   # T_in in-plane bending at section A
 
     # --- Axial hole stress (Mother Doc Eq 6.8) ---
     D_B_hole = D_pB + delta
-    D_A_hole = D_pA + delta
+    D_A_hole = d_shaft_A + delta   # shaft bore at section A
     Z_c_B = max(w - D_B_hole, 1e-9) * t
     Z_c_A = max(w - D_A_hole, 1e-9) * t
     sigma_ax_hole_B = Kt_lug * abs(F_r_crank_B) / Z_c_B
     sigma_ax_hole_A = Kt_lug * abs(F_r_crank_A) / Z_c_A
 
-    # --- Out-of-plane bending stress at Pin B (Mother Doc Eq 6.10) ---
+    # --- Critical Point 2: out-of-plane extreme fibre (η=0, ζ=±c_c/2) ---
+    # Same governing point as for rod: max τ_T, max τ_V, max OOP bending all coincide here.
+    # Full normal stress = axial + OOP bending (no in-plane bending contribution at η=0).
     M_eta_crank_B = abs(F_r_crank_B) * i_offset
-    sigma_oop_crank_B = M_eta_crank_B * c_yc / I_yc
+    sigma_body_B_pt2 = abs(F_r_crank_B) / A_c + M_eta_crank_B * c_yc / I_yc
 
-    # --- Torsion (Mother Doc Sections 6.6 and 6.7) ---
-    # T_offset = F_t,crank,B * i_offset  (Eq 6.16)
+    # --- Torsion (Mother Doc Section 6.7) ---
+    # T_in does NOT create Saint-Venant torsion of the crank bar:
+    #   T_in·ẑ · ê₁ = 0  (see sigma_ax_body_A note above).
+    # Only T_offset = F_t,crank,B · i_offset drives bar torsion (Eq 6.16).
     T_offset = abs(F_t_crank_B) * i_offset
-    # Saint-Venant: tau_max = T / (beta * b * c^2), b >= c (Shigley's/Roark Table 10.7)
-    # Sort so b is always the longer dimension — either w or t depending on design.
+    # τ_max = T / (β·b·c²), b = max(w,t), c = min(w,t).
+    # τ_T_max occurs at (η=0, ζ=±c_c/2) — midpoint of the longer face.
     b_c = max(w, t)
     c_c = min(w, t)
     beta_c = _beta_torsion(b_c, c_c)
 
-    # tau_T,in = T_in / (beta_c * b * c^2)  (Eq 6.15)
-    tau_T_in = abs(T_in) / (beta_c * b_c * c_c**2)
-
-    # tau_T,offset = T_offset / (beta_c * b * c^2)  (Eq 6.17)
+    # tau_T,offset — only genuine bar torsion (Eq 6.17); T_in removed
     tau_T_offset = T_offset / (beta_c * b_c * c_c**2)
 
-    # Combined torsional shear at holes (Eq 6.18 / 6.19)
-    # T_total = T_in + T_offset (same crank axis, same denominator)
-    T_total = abs(T_in) + T_offset
+    # Combined torsion for holes: T_total = T_offset only (T_in is not bar torsion)
+    T_total = T_offset
     hole_factor_B = max(1.0 - math.pi * D_B_hole**2 / (4.0 * w * t), 0.01)
-    hole_factor_A = max(1.0 - math.pi * D_A_hole**2 / (4.0 * w * t), 0.01)
+    hole_factor_A = max(1.0 - math.pi * D_A_hole**2  / (4.0 * w * t), 0.01)
     tau_nom_hole_B = T_total / (beta_c * b_c * c_c**2 * hole_factor_B)
     tau_nom_hole_A = T_total / (beta_c * b_c * c_c**2 * hole_factor_A)
 
@@ -391,9 +421,11 @@ def _crank_stresses(
     tau_max_hole_B = Kt_hole * tau_nom_hole_B
     tau_max_hole_A = Kt_hole * tau_nom_hole_A
 
-    # --- Transverse shear ---
-    tau_xy_B = abs(F_t_crank_B) / A_c
-    tau_xy_A = abs(F_t_crank_A) / A_c
+    # --- Transverse shear at Point 2 (corrected) ---
+    # τ_xη at (η=0, ζ=±c_c/2) = (3/2)·F_t/A — maximum value, same point as τ_T_max.
+    # Both act in η-direction → ADD (not max).
+    tau_V_crank = 1.5 * max(abs(F_t_crank_B), abs(F_t_crank_A)) / A_c
+    tau_body_crit = tau_T_offset + tau_V_crank   # combined critical shear at Point 2
 
     # --- Smallest-area lug shear (Mother Doc Eq 6.13) ---
     denom_B = max(w - D_B_hole, 1e-9) * t
@@ -402,21 +434,24 @@ def _crank_stresses(
     tau_sma_A = abs(F_t_crank_A) / denom_A
 
     # --- Collect worst-case ---
+    # sigma: Point 1 (η=±w/2) → sigma_ax_body_{A,B} = axial + in-plane bending (+ T_in at A)
+    #        Point 2 (η=0, ζ=±c_c/2) → sigma_body_B_pt2 = axial + OOP bending
     sigma_crank = max(
         sigma_ax_body_B,
         sigma_ax_body_A,
         sigma_ax_hole_B,
         sigma_ax_hole_A,
-        sigma_oop_crank_B,
+        sigma_body_B_pt2,
     )
 
+    # tau: tau_body_crit = τ_T_offset + τ_V summed at Point 2
+    #      T_in removed from torsion (reclassified as in-plane bending at section A)
+    #      tau_max_hole_* = torsion-dominated at holes with Kt (T_total = T_offset only)
+    #      tau_sma_* = net-section lug shear (no 3/2; lug analysis convention)
     tau_crank = max(
-        tau_T_in,
-        tau_T_offset,
+        tau_body_crit,
         tau_max_hole_B,
         tau_max_hole_A,
-        tau_xy_B,
-        tau_xy_A,
         tau_sma_B,
         tau_sma_A,
     )
@@ -446,7 +481,7 @@ def _pin_stresses(
     Returns:
         (sigma_pin, tau_pin) worst-case pair (Pa)
     """
-    D_pA = design['pin_diameter_A']
+    d_shaft_A = design['d_shaft_A']
     D_pB = design['pin_diameter_B']
     D_pC = design['pin_diameter_C']
     t_rod   = design['thickness_l']
@@ -463,26 +498,26 @@ def _pin_stresses(
     mag_C = float(np.linalg.norm(F_C))
 
     # Pin cross-sectional areas
-    A_pA = math.pi * D_pA**2 / 4.0
+    A_sA = math.pi * d_shaft_A**2 / 4.0   # shaft A (circular cross-section)
     A_pB = math.pi * D_pB**2 / 4.0
     A_pC = math.pi * D_pC**2 / 4.0
 
-    # --- Pin shear (Mother Doc Section 7.1) ---
-    tau_pin_A = mag_A / A_pA                   # single shear
-    tau_pin_B = mag_B / A_pB                   # single shear
-    tau_pin_C = mag_C / (2.0 * A_pC)           # double shear
+    # --- Pin/shaft shear (Mother Doc Section 7.1) ---
+    tau_pin_A = mag_A / A_sA               # shaft A — single shear (transverse load at bore)
+    tau_pin_B = mag_B / A_pB               # single shear
+    tau_pin_C = mag_C / (2.0 * A_pC)      # double shear
 
-    # --- Pin bending (Mother Doc Section 7.2) ---
-    M_pin_A = mag_A * t_crank / 2.0
+    # --- Pin/shaft bending (Mother Doc Section 7.2) ---
+    M_pin_A = mag_A * t_crank / 2.0       # shaft bending at bore mid-plane
     M_pin_B = mag_B * t_crank / 2.0
     M_pin_C = mag_C * t_rod   / 4.0
 
-    sigma_b_A = 32.0 * M_pin_A / (math.pi * D_pA**3)
+    sigma_b_A = 32.0 * M_pin_A / (math.pi * d_shaft_A**3)
     sigma_b_B = 32.0 * M_pin_B / (math.pi * D_pB**3)
     sigma_b_C = 32.0 * M_pin_C / (math.pi * D_pC**3)
 
     # --- Bearing stress (Mother Doc Section 7.3) ---
-    sigma_br_A       = abs(F_r_crank_A) / (D_pA * t_crank)
+    sigma_br_A       = abs(F_r_crank_A) / (d_shaft_A * t_crank)
     sigma_br_B_rod   = abs(F_r_rod_B)   / (D_pB * t_rod)
     sigma_br_B_crank = abs(F_r_crank_B) / (D_pB * t_crank)
     sigma_br_C       = abs(F_r_rod_C)   / (2.0 * D_pC * t_rod)
@@ -532,7 +567,8 @@ def evaluate(
                    'r', 'l', 'e'                          — 2D kinematics (m)
                    'width_r', 'thickness_r'               — crank cross-section (m)
                    'width_l', 'thickness_l'               — rod cross-section (m)
-                   'pin_diameter_A/B/C'                   — pin diameters (m)
+                   'd_shaft_A'                            — motor shaft diameter (m)
+                   'pin_diameter_B', 'pin_diameter_C'    — lug pin diameters (m)
                    'I_area_crank_yy', 'I_area_crank_zz'  — crank area MOI (m^4)
                    'I_area_rod_yy',   'I_area_rod_zz'    — rod area MOI (m^4)
                    'mass_rod', 'mass_crank'               — link masses (kg)

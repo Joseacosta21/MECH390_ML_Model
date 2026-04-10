@@ -36,18 +36,9 @@ import numpy as np
 
 from mech390.physics._utils import get_or_warn
 
-# Fallback defaults (overridden by config via design dict)
-# Basquin S-N constants — AA2024-T3 experimental (fully reversed, R=-1)
-# Anchors: (10^7 cycles, 230 MPa) and (10^9 cycles, 155 MPa)
-# b = log10(155/230) / log10(1e9/1e7) = -0.086
-# A = 230 / (1e7)^(-0.086) = 924 MPa
-_BASQUIN_A_DEFAULT: float = 924e6   # Pa — baseline.yaml stress_analysis.basquin_A
-_BASQUIN_B_DEFAULT: float = -0.086  # dimensionless — baseline.yaml stress_analysis.basquin_b
-_C_SUR_DEFAULT: float = 0.88  # machined surface, Al 2024-T3 — baseline.yaml stress_analysis.C_sur
-_C_ST_DEFAULT: float  = 1.0
-_C_R_DEFAULT: float   = 0.81
-_C_M_DEFAULT: float   = 1.0
-_C_F_DEFAULT: float   = 1.0
+# All Marin correction factors and Basquin constants are required arguments.
+# They must be injected from the design dict (read from baseline.yaml by generate.py).
+# Missing keys surface via get_or_warn() in evaluate_fatigue() — no silent fallbacks.
 
 
 # ---------------------------------------------------------------------------
@@ -100,11 +91,11 @@ def _C_s_size_pin(d: float) -> float:
 
 def _sn_prime_rect(
     w: float, t: float, Sn: float,
-    C_sur: float = _C_SUR_DEFAULT,
-    C_st: float  = _C_ST_DEFAULT,
-    C_R: float   = _C_R_DEFAULT,
-    C_m: float   = _C_M_DEFAULT,
-    C_f: float   = _C_F_DEFAULT,
+    C_sur: float,
+    C_st: float,
+    C_R: float,
+    C_m: float,
+    C_f: float,
 ) -> float:
     """
     Corrected fatigue strength for a rectangular link section (Mott Ch. 5).
@@ -130,11 +121,11 @@ def _sn_prime_rect(
 
 def _sn_prime_pin(
     d: float, Sn: float,
-    C_sur: float = _C_SUR_DEFAULT,
-    C_st: float  = _C_ST_DEFAULT,
-    C_R: float   = _C_R_DEFAULT,
-    C_m: float   = _C_M_DEFAULT,
-    C_f: float   = _C_F_DEFAULT,
+    C_sur: float,
+    C_st: float,
+    C_R: float,
+    C_m: float,
+    C_f: float,
 ) -> float:
     """
     Corrected fatigue strength for a circular pin section (Mott Ch. 5).
@@ -195,8 +186,8 @@ def _stress_cycle(
 
 def _cycles_to_failure(
     sigma_a_eq: float,
-    basquin_A: float = _BASQUIN_A_DEFAULT,
-    basquin_b: float = _BASQUIN_B_DEFAULT,
+    basquin_A: float,
+    basquin_b: float,
 ) -> float:
     """
     Cycles to failure N_f from experimental Basquin S-N curve.
@@ -245,8 +236,8 @@ def _component_fatigue(
     S_y: float,
     n_rpm: float,
     total_cycles: Optional[float],
-    basquin_A: float = _BASQUIN_A_DEFAULT,
-    basquin_b: float = _BASQUIN_B_DEFAULT,
+    basquin_A: float,
+    basquin_b: float,
 ) -> Dict[str, Any]:
     """
     Compute full fatigue analysis for one structural component.
@@ -355,7 +346,8 @@ def evaluate(
     Geometry required in design dict:
         'width_l', 'thickness_l'              — rod cross-section (m)
         'width_r', 'thickness_r'              — crank cross-section (m)
-        'pin_diameter_A/B/C'                  — pin diameters (m)
+        'pin_diameter_B', 'pin_diameter_C'    — lug pin diameters (m)
+        # d_shaft_A excluded: shaft A uses Mott 12-24 check in engine.py
 
     Args:
         sigma_rod_history   : normal stress in rod at each sweep step (Pa)
@@ -385,29 +377,35 @@ def evaluate(
         float(total_cycles_raw) if total_cycles_raw is not None else None
     )
 
-    # Configurable fatigue constants (from baseline.yaml via design dict)
-    basquin_A = float(get_or_warn(design, 'basquin_A', _BASQUIN_A_DEFAULT, context=_ctx))
-    basquin_b = float(get_or_warn(design, 'basquin_b', _BASQUIN_B_DEFAULT, context=_ctx))
-    C_sur     = float(get_or_warn(design, 'C_sur', _C_SUR_DEFAULT, context=_ctx))
-    C_st     = float(get_or_warn(design, 'C_st',  _C_ST_DEFAULT,  context=_ctx))
-    C_R      = float(get_or_warn(design, 'C_R',   _C_R_DEFAULT,   context=_ctx))
-    C_m      = float(get_or_warn(design, 'C_m',   _C_M_DEFAULT,   context=_ctx))
-    C_f      = float(get_or_warn(design, 'C_f',   _C_F_DEFAULT,   context=_ctx))
+    # Configurable fatigue constants — must be injected from baseline.yaml
+    try:
+        basquin_A = float(design['basquin_A'])
+        basquin_b = float(design['basquin_b'])
+        C_sur     = float(design['C_sur'])
+        C_st      = float(design['C_st'])
+        C_R       = float(design['C_R'])
+        C_m       = float(design['C_m'])
+        C_f       = float(design['C_f'])
+    except KeyError as exc:
+        raise KeyError(
+            f"fatigue.evaluate: required key {exc} missing from design dict. "
+            f"Ensure generate.py / validate_candidate.py injects all stress_analysis "
+            f"constants from baseline.yaml before calling engine.evaluate_design()."
+        ) from exc
 
     # --- Link dimensions ---
     w_rod   = float(design['width_l'])
     t_rod   = float(design['thickness_l'])
     w_crank = float(design['width_r'])
     t_crank = float(design['thickness_r'])
-    D_pA    = float(design['pin_diameter_A'])
     D_pB    = float(design['pin_diameter_B'])
     D_pC    = float(design['pin_diameter_C'])
 
     # --- Corrected fatigue strengths (Mott Ch. 5) ---
     S_n_prime_rod   = _sn_prime_rect(w_rod,   t_rod,   Sn, C_sur, C_st, C_R, C_m, C_f)
     S_n_prime_crank = _sn_prime_rect(w_crank, t_crank, Sn, C_sur, C_st, C_R, C_m, C_f)
-    # For pins: use smallest pin diameter — most conservative size factor
-    d_pin_min = min(D_pA, D_pB, D_pC)
+    # For lug pins B and C: use the smaller diameter — shaft A excluded (separate Mott 12-24 check)
+    d_pin_min = min(D_pB, D_pC)
     S_n_prime_pin   = _sn_prime_pin(d_pin_min, Sn, C_sur, C_st, C_R, C_m, C_f)
 
     # --- Convert histories to numpy arrays ---
