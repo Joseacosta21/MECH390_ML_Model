@@ -154,13 +154,35 @@ def _rod_stresses(
     crank angle theta.
 
     Covers (Mother Doc Sections 4 and 5):
-      - Axial body stress at Pin B and C ends           (sigma_ax,rod,body)
-      - Axial hole stress at Pin B and C                (sigma_ax,rod,hole)
-      - Gravity-induced peak bending stress             (sigma from M_rod,max)
-      - Out-of-plane bending stress at Pin B            (sigma_oop,rod,B)
-      - Torsional shear at rod body and holes           (tau_T,rod)
-      - Transverse shear stress                         (tau from F_t)
-      - Smallest-area lug shear at Pin B and C          (tau_sma)
+      - Corner body stress at Pin B end — Eq 4.4b  (sigma_body_B_corner)
+        axial + in-plane bending M_zeta_max + OOP bending M_eta_rod_B
+      - Corner body stress at Pin C end — Eq 4.5b  (sigma_body_C_corner)
+        axial + in-plane bending M_zeta_max only (M_η = 0 at Pin C)
+      - Axial hole stress at Pin B and C             (sigma_ax_hole_B/C)
+      - Torsional shear at rod body and holes        (tau_T,rod)
+      - Transverse shear stress                      (tau_V,rod)
+      - Smallest-area lug shear at Pin B and C       (tau_sma)
+
+    Normal stress formula (Eq 4.4 — full 3D):
+        sigma_xi_B(xi, eta, zeta) = F_r_B / A_r
+                                    + M_zeta(xi) * zeta / I_zr
+                                    + M_eta(xi)  * eta  / I_yr
+        M_zeta(xi) = F_t_B * xi                           (in-plane bending)
+        M_eta(xi)  = F_r_B * i_offset * (1 - xi / L)     (OOP, decays B→C)
+
+    Peak corner (eta = ±t/2, zeta = ±w/2) near Pin B (Eq 4.4b):
+        sigma_body_B_corner = |F_r_B| / A_r
+                              + M_zeta_max * c_zr / I_zr   [= 6*M_zeta/(t*w^2)]
+                              + M_eta_rod_B * c_yr / I_yr  [= 6*M_eta/(w*t^2)]
+        M_zeta_max = |F_t_B| * L / 4   (representative section)
+        M_eta_rod_B = |F_r_B| * i_offset  (at xi=0, ξ=0 is maximum OOP)
+
+    Peak corner near Pin C (Eq 4.5b) — M_eta = 0 because rod/slider share
+    z-centreline (instructions.md §3.4), so no eccentricity at Pin C:
+        sigma_body_C_corner = |F_r_C| / A_r + M_zeta_max * c_zr / I_zr
+
+    Gravity distributed bending REMOVED: rod self-weight already enters F_B
+    and F_C through the Newton-Euler force balance — a separate UDL double-counts it.
 
     Returns:
         (sigma_rod, tau_rod) worst-case pair (Pa)
@@ -173,9 +195,6 @@ def _rod_stresses(
     D_pC = design['pin_diameter_C']
     I_yr = design['I_area_rod_yy']  # w*t^3/12 — out-of-plane bending (weak axis)
     I_zr = design['I_area_rod_zz']  # t*w^3/12 — in-plane bending (strong axis)
-    _ctx = 'stresses._rod_stresses'
-    g    = get_or_warn(design, 'g', 9.81, context=_ctx)
-    m_rod = get_or_warn(design, 'mass_rod', 0.0, context=_ctx)
 
     # Configurable stress-analysis constants — must be injected from baseline.yaml
     try:
@@ -189,31 +208,51 @@ def _rod_stresses(
             f"constants from baseline.yaml before calling engine.evaluate_design()."
         ) from exc
 
-    # i_offset: out-of-plane offset at Pin B joint (Mother Doc)
+    # i_offset: OOP eccentricity at Pin B — crank/rod touch face-to-face (instructions.md §3.4)
+    # Zero eccentricity at Pin C — rod/slider share z-centreline → M_eta = 0 at C
     i_offset = (design['thickness_l'] + design['thickness_r']) / 2.0
 
     # Gross cross-section area
     A_r = w * t
 
     # Extreme fibre distances
-    c_yr = t / 2.0   # out-of-plane (weak axis)
-    c_zr = w / 2.0   # in-plane (strong axis)
+    c_yr = t / 2.0   # out-of-plane (weak axis): eta = ±t/2
+    c_zr = w / 2.0   # in-plane (strong axis):   zeta = ±w/2
 
     # Rod angle
     phi = kinematics.rod_angle(theta, design['r'], L, design['e'])
 
     # Force decomposition into rod frame
     F_r_B, F_t_B, F_r_C, F_t_C = _rod_frame_forces(F_B, F_C, phi)
+    
+   
+    
+    
+    # --- Bending moments (Eq 4.4) ---
+    # M_zeta_max: representative peak of linear in-plane bending diagram (xi = L/4)
+    # M_eta_rod_B: OOP moment at Pin B (xi=0); max OOP since (1 - 0/L) = 1
+    M_zeta_max_B  = abs(F_t_B) * L / 4.0 
+    M_eta_rod_B = abs(F_r_C) * i_offset # M_eta at Pin B end - decays linearly from M_eta 
 
-    # --- Gravity distributed bending (Mother Doc Section 4.1) ---
-    # w_rod,g = (m_rod * g / l_rod) * cos(phi)
-    # M_rod,max = w_rod,g * l_rod^2 / 8  (midspan, parabolic, pin-pin BC)
-    w_rod_g = (m_rod * g / L) * math.cos(phi)
-    M_rod_max = w_rod_g * L**2 / 8.0
+    # --- Corner body stress at Pin B end — Eq 4.4b ---
+    # Corner (eta = ±t/2, zeta = ±w/2): in-plane AND OOP bending both non-zero.
+    # sigma = axial + M_zeta*c_zr/I_zr + M_eta*c_yr/I_yr
+    #       = F_r/A + 6*M_zeta/(t*w^2) + 6*M_eta/(w*t^2)
+    sigma_body_B_corner = (abs(F_r_B) / A_r
+                           + abs(M_zeta_max_B)  * c_zr / I_zr
+                           + abs(M_eta_rod_B) * c_yr / I_yr)
+                           
+    ## -- Bending moments at Pin C end (Eq 4.5) ---
+    # M_zeta_max_C = abs(F_t_C) * L / 4.0  (same representative section as for Pin B)
+    M_zeta_max_C = abs(F_t_C) * L / 4.0
+    M_eta_rod_C = abs(F_r_B) * i_offset ## M_eta at Pin C end — decays linearly from M_eta_rod_B at B to 0 at C (xi=L)
 
-    # --- Axial body stress (Mother Doc Eq 4.6) — worst case (sum) ---
-    sigma_ax_body_B = (abs(F_r_B) / A_r) + (abs(M_rod_max) * c_zr / I_zr)
-    sigma_ax_body_C = (abs(F_r_C) / A_r) + (abs(M_rod_max) * c_zr / I_zr)
+    # --- Corner body stress at Pin C end — Eq 4.5b ---
+    # M_eta = 0 at xi = L (Pin C): rod/slider share z-centreline, no eccentricity.
+    # sigma = axial + M_zeta*c_zr/I_zr   (in-plane only)
+    sigma_body_C_corner = (abs(F_r_C) / A_r 
+                        + abs(M_zeta_max_C) * c_zr / I_zr 
+                        + abs(M_eta_rod_C) * c_yr / I_yr) 
 
     # --- Axial hole stress (Mother Doc Eq 4.7) ---
     # Z_r,B = (w_rod - D_B_hole) * t_rod
@@ -224,28 +263,16 @@ def _rod_stresses(
     sigma_ax_hole_B = Kt_lug * abs(F_r_B) / Z_r_B
     sigma_ax_hole_C = Kt_lug * abs(F_r_C) / Z_r_C
 
-    # --- Critical Point 2: out-of-plane extreme fibre (η=0, ζ=±c_r/2) ---
-    # The governing combined-stress location on the rod cross-section:
-    #   · OOP bending (from i_offset at B) is maximum here — extreme OOP fibre
-    #   · Saint-Venant τ_T_max also peaks here — midpoint of longer face (Roark)
-    #   · In-plane transverse shear τ_V also peaks here — τ_xη is uniform in ζ,
-    #     maximum at η=0 (neutral axis for in-plane loading)
-    # Full normal stress at Point 2 = axial + OOP bending (no in-plane bending at η=0).
-    # Compare with sigma_ax_body_{B,C} (Point 1: axial + in-plane bending at η=±w/2).
-    M_eta_rod_B = abs(F_r_B) * i_offset
-    sigma_body_B_pt2 = (abs(F_r_B) / A_r) + (M_eta_rod_B * c_yr / I_yr)
-
     # --- Torsion (Mother Doc Sections 5.5 / 5.6) ---
     # T_rod = F_t,rod,C * i_offset  (Eq 5.6)
-    T_rod = abs(F_t_C) * i_offset
-    # Saint-Venant: τ_max = T / (β·b·c²), b = max(w,t), c = min(w,t)  (Roark Table 10.7).
-    # c is ALWAYS min(w,t) regardless of torsion direction; torsion direction only affects sign.
-    # τ_T_max occurs at (η=0, ζ=±c_r/2) — midpoint of the longer face.
+    T_rod = abs(F_t_B) * i_offset
+    # Saint-Venant: tau_max = T / (beta*b*c^2), b = max(w,t), c = min(w,t) (Roark Table 10.7).
+    # tau_T_max occurs at (eta=0, zeta=±c_r/2) — midpoint of the longer face.
     b_r = max(w, t)
     c_r = min(w, t)
     beta_r = _beta_torsion(b_r, c_r)
 
-    # tau_T,rod body — maximum at Point 2 (η=0, ζ=±c_r/2)
+    # tau_T,rod body — maximum at (eta=0, zeta=±c_r/2)
     tau_T_rod_body = T_rod / (beta_r * b_r * c_r**2)
 
     # tau_nom,hole at Pin B and C (Eq 5.9)
@@ -258,35 +285,33 @@ def _rod_stresses(
     tau_max_hole_B = Kt_hole * tau_nom_hole_B
     tau_max_hole_C = Kt_hole * tau_nom_hole_C
 
-    # --- Transverse shear at Point 2 (Mother Doc Eq 4.8; corrected) ---
-    # For a rectangular section, τ_xη(η) is uniform across ζ; peak = (3/2)·F_t/A at η=0
-    # (Mott Sec. 13-2; Shigley Sec. 3-11).  At Point 2 (η=0) this is the maximum transverse
-    # shear, acting in the η-direction — SAME direction as τ_T_max at that point.
-    # → τ_T and τ_V ADD at Point 2; they must not be compared with max().
+    # --- Transverse shear (Mother Doc Eq 4.8; corrected) ---
+    # tau_xeta peak = (3/2)*F_t/A at eta=0. Acts same direction as tau_T_max
+    # at (eta=0, zeta=±c_r/2) → ADD, not max.
     tau_V_rod = 1.5 * max(abs(F_t_B), abs(F_t_C)) / A_r
-    tau_body_crit = tau_T_rod_body + tau_V_rod   # combined critical shear at Point 2
+    tau_body_crit = tau_T_rod_body + tau_V_rod   # combined shear at (eta=0, zeta=±c_r/2)
 
     # --- Smallest-area lug shear (Mother Doc Eq 4.9) ---
-    # Net-section lug shear uses F_t/A_net (no 3/2; standard lug analysis nominal shear).
+    # Net-section lug shear: F_t/A_net (no 3/2; standard lug analysis)
     denom_B = max(w - D_B_hole, 1e-9) * t
     denom_C = max(w - D_C_hole, 1e-9) * t
     tau_sma_B = abs(F_t_B) / denom_B
     tau_sma_C = abs(F_t_C) / denom_C
 
     # --- Collect worst-case ---
-    # sigma: Point 1 (η=±w/2) → sigma_ax_body = axial + in-plane bending
-    #        Point 2 (η=0, ζ=±c_r/2) → sigma_body_B_pt2 = axial + OOP bending
+    # sigma: corner B (Eq 4.4b) — axial + in-plane + OOP bending at (±t/2, ±w/2)
+    #        corner C (Eq 4.5b) — axial + in-plane bending only (M_eta=0 at C)
+    #        holes    (Eq 4.7)  — axial net-section with Kt
     sigma_rod = max(
-        sigma_ax_body_B,
-        sigma_ax_body_C,
+        sigma_body_B_corner,
+        sigma_body_C_corner,
         sigma_ax_hole_B,
         sigma_ax_hole_C,
-        sigma_body_B_pt2,
     )
 
-    # tau: tau_body_crit = τ_T + τ_V summed at Point 2 (same location, same direction)
-    #      tau_max_hole_* = torsion-dominated at holes with Kt (τ_V secondary at holes)
-    #      tau_sma_* = net-section lug shear (no 3/2; lug analysis convention)
+    # tau: tau_body_crit = tau_T + tau_V summed at (eta=0, zeta=±c_r/2)
+    #      tau_max_hole_* = Kt-amplified torsion at holes
+    #      tau_sma_*      = net-section lug shear
     tau_rod = max(
         tau_body_crit,
         tau_max_hole_B,
