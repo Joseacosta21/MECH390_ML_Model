@@ -504,6 +504,61 @@ Configuration loading is responsible for numeric normalization (including scient
 
 ---
 
+### `src/mech390/ml/`
+
+The ML stack is fully data-size-agnostic. All array dimensions (`input_dim`, `n_reg_targets`) are derived at runtime from `features.py` constants — no hardcoded integers anywhere in the training path. Changing the dataset size, adding features, or adding regression targets requires only editing `features.py` and retraining.
+
+#### `features.py` ✅ Implemented
+
+Constants (authoritative source of truth — all other modules derive dims from these):
+- `INPUT_FEATURES` (list, currently 10) — the independent design variables fed to the NN
+- `REGRESSION_TARGETS` (list, currently 8) — continuous outputs predicted by the regression head
+- `CLASSIFICATION_TARGET` — `'pass_fail'` (binary)
+
+Functions:
+- `load_dataset(csv_pass, csv_fail)` → merged DataFrame; derives `min_n_static = min(n_static_rod, n_static_crank, n_static_pin)`; drops rows with NaN in any required column
+- `split_dataset(df, train_frac, val_frac, random_seed)` → `(train_df, val_df, test_df)` — stratified on `pass_fail`
+- `fit_scaler(train_df)` → fitted `StandardScaler` on `INPUT_FEATURES` from the training split only
+- `get_arrays(df, scaler)` → `(X, y_clf, y_reg)` as `float32` numpy arrays; X shape `(N, len(INPUT_FEATURES))`, y_reg shape `(N, len(REGRESSION_TARGETS))`
+- `compute_target_stats(train_df)` → `{target: {min, max}}` dict; used by the optimizer to normalise objective values to [0, 1]
+- `normalize_targets(y_reg, target_stats)` / `denormalize_targets(y_norm, target_stats)` — min-max normalisation to [0, 1] before MSE loss; denormalise before reporting or passing to optimizer
+- `save_scaler(scaler, path)` / `load_scaler(path)` — pickle persistence
+
+#### `models.py` ✅ Implemented
+
+- `CrankSliderSurrogate(input_dim, hidden_sizes, n_reg_targets, dropout_rate, use_batch_norm)` — shared ReLU FC trunk → classification head (1 output, BCEWithLogitsLoss) + regression head (`n_reg_targets` outputs, MSELoss)
+  - `forward(x)` → `(logit_clf, pred_reg)` — apply `sigmoid` externally for pass probability
+  - `predict_pass_prob(x)` → pass probability in [0, 1]
+- `save_checkpoint(model, optimizer_state, epoch, val_f1, hparams, path)` — saves full state dict + hparams dict; hparams must include `input_dim`, `n_reg_targets`, `use_batch_norm` so the model can be reconstructed without the source
+- `load_checkpoint(path, device)` → raw dict
+- `build_model_from_hparams(hparams)` — reconstructs model from checkpoint hparams; raises `KeyError` if any required key is missing (fail-fast on stale checkpoints)
+
+#### `train.py` ✅ Implemented
+
+- `run_training(cfg)` — full pipeline: load data → StandardScaler → normalise regression targets → Optuna sweep → save best checkpoint + scaler + target_stats
+- `_train_one_trial(hparams, loaders, cfg, device)` → `(best_val_f1, model)` — trains one model config; early stopping on `val_f1 > best_val_f1` (not val_loss) so the checkpoint always reflects the best-classified epoch
+- `_make_objective(loaders, cfg, device, best_tracker)` → Optuna objective function; tracks globally best model across all trials
+- All dims derived from `len(F.INPUT_FEATURES)` and `len(F.REGRESSION_TARGETS)` — no hardcoded integers
+- Config: `configs/train/surrogate.yaml` — controls architecture search space, dropout, lr, batch size, weight decay, epochs, patience, loss weights
+
+#### `infer.py` ✅ Implemented
+
+- `SurrogatePredictor(checkpoint, scaler_path, stats_path, device)` — loads checkpoint, validates `ckpt['hparams']['n_reg_targets'] == len(F.REGRESSION_TARGETS)` (raises `ValueError` on mismatch), builds model, loads scaler
+- `predict(design)` — accepts single dict, list of dicts, or DataFrame; returns dict (single input) or DataFrame (batch); keys: `pass_prob`, `pass_fail_pred`, + all `REGRESSION_TARGETS` in physical units (denormalised)
+
+#### `optimize.py` ✅ Implemented
+
+- `run_optimization(generate_cfg, optimize_cfg, predictor)` → list of top-N candidate dicts ranked by weighted score
+- Uses `scipy.optimize.differential_evolution` over the bounds from `baseline.yaml`
+- Score function: weighted sum of normalised regression targets (from `search.yaml`) penalised by `pass_prob < threshold`
+- Three hard analytical constraints enforced as penalties (see CLAUDE.md — Optimizer Constraints):
+  1. Net-section feasibility: `width - D_pin > delta + 2×min_wall`
+  2. Kinematic feasibility: `l > r + e`
+  3. Euler buckling: analytical `P_cr = π²EI/l²`; penalises `n_buck < 3.0`
+- **OOD penalty (ML-P2):** Predictions outside the training range by more than `ood_tolerance` (default 10%) are penalised as `weight × ood_excess × ood_penalty_scale` (default 10.0). Applied per-objective before the direction flip. Both parameters configurable in `search.yaml` under `constraints`.
+
+---
+
 ### `scripts/`
 
 **Purpose:** Entry points only. Each script loads config and calls library code.

@@ -13,13 +13,23 @@ Workflow
 Score function
 --------------
     score(x) = Σ wᵢ * normalize(objᵢ(x))
+               - Σ wᵢ * ood_penalty(objᵢ(x))
                - penalty * max(0, threshold - pass_prob(x))
+               - hard_constraint_penalties
 
     normalize maps each objective to [0,1] using training-set min/max:
       - For 'minimize' objectives: score contribution = 1 - normalized_value
         (lower raw value → higher score contribution)
       - For 'maximize' objectives: score contribution = normalized_value
         (higher raw value → higher score contribution)
+
+    OOD penalty: if a predicted value falls outside the training range by more
+    than ood_tolerance (fraction), the excess is penalised proportionally to
+    the objective's weight and ood_penalty_scale. This prevents the optimizer
+    from exploiting wild surrogate extrapolations as free high scores.
+
+      ood_amount = max(0, -norm - tol) + max(0, norm - 1 - tol)
+      penalty_contribution = weight * ood_amount * ood_penalty_scale
 
     The optimizer MINIMISES -score (i.e., maximises score).
 """
@@ -94,6 +104,8 @@ def _build_score_fn(
     penalty_net_section_scale: float = 1000.0,
     penalty_kinematic_scale:   float = 100.0,
     penalty_buckling_scale:    float = 1.0,
+    ood_tolerance:            float = 0.1,
+    ood_penalty_scale:        float = 10.0,
     device:                   torch.device = torch.device('cpu'),
 ):
     """
@@ -101,13 +113,28 @@ def _build_score_fn(
 
     x : 1-D numpy array of length 10 (raw geometry values, un-normalised)
 
-    Four hard constraints applied as penalties:
+    Hard constraints applied as penalties:
     1. pass_prob >= pass_threshold  (surrogate classification gate)
     2. width - D_pin > min_net_section for every pin (prevents degenerate
        near-zero net sections that produce ~TPa stresses in the physics engine)
     3. l > r + e  (kinematic feasibility: rod must bridge crank to slider at all angles)
     4. Euler buckling FoS >= n_buck_min  (analytical estimate from rod geometry)
        Uses P_cr = π²EI/l² and a conservative F_rod estimate from slider dynamics.
+
+    OOD penalty:
+    Each regression prediction is normalised to [0, 1] using training-set
+    min/max. If the raw normalised value falls outside [-ood_tolerance,
+    1 + ood_tolerance], the excess is subtracted from the score, scaled by
+    the objective weight and ood_penalty_scale. This prevents the optimizer
+    from rewarding wildly extrapolated predictions with free high scores.
+
+    Args:
+        ood_tolerance:     Fractional grace band beyond [0, 1] before penalty
+                           kicks in. Default 0.1 (10% of training range).
+        ood_penalty_scale: Multiplier on the OOD excess, per unit weight.
+                           Default 10.0 means a full-weight objective that
+                           extrapolates 1.0 range-unit beyond the band loses
+                           the equivalent of its entire weight from the score.
     """
     # Indices of width/pin pairs in _GEO_KEYS that must satisfy the net-section constraint:
     # (width_idx, pin_idx) matching the four physical constraints
@@ -136,7 +163,7 @@ def _build_score_fn(
         # before the score function applies its own normalisation step.
         reg_vals = F.denormalize_targets(
             pred_reg.cpu().numpy(), target_stats
-        ).ravel()  # shape (7,) in physical units
+        ).ravel()  # shape (len(REGRESSION_TARGETS),) in physical units
 
         score = 0.0
         for obj_name, obj_cfg in objectives.items():
@@ -148,8 +175,18 @@ def _build_score_fn(
             stats  = target_stats[obj_name]
             rng    = stats['max'] - stats['min']
             norm   = (raw - stats['min']) / rng if rng > 0 else 0.5
-            norm   = float(np.clip(norm, 0.0, 1.0))
             weight = float(obj_cfg['weight'])
+
+            # OOD penalty: subtract from score proportionally to how far the
+            # prediction falls outside the training range (plus grace band).
+            # Applied before clipping so the penalty captures the full excess.
+            ood_low    = max(0.0, -norm - ood_tolerance)
+            ood_high   = max(0.0,  norm - 1.0 - ood_tolerance)
+            ood_amount = ood_low + ood_high
+            if ood_amount > 0.0:
+                score -= weight * ood_amount * ood_penalty_scale
+
+            norm = float(np.clip(norm, 0.0, 1.0))
 
             if obj_cfg['direction'] == 'minimize':
                 score += weight * (1.0 - norm)   # lower raw → higher contribution
@@ -254,6 +291,8 @@ def run_optimization(
     penalty_net_section_scale  = float(constraint_cfg.get('penalty_net_section_scale', 1000.0))
     penalty_kinematic_scale    = float(constraint_cfg.get('penalty_kinematic_scale',   100.0))
     penalty_buckling_scale     = float(constraint_cfg.get('penalty_buckling_scale',    1.0))
+    ood_tolerance              = float(constraint_cfg.get('ood_tolerance',             0.1))
+    ood_penalty_scale          = float(constraint_cfg.get('ood_penalty_scale',         10.0))
 
     # Analytical buckling parameters (from material + operating config)
     material_cfg    = gen_cfg.get('material', {})
@@ -280,6 +319,8 @@ def run_optimization(
         penalty_net_section_scale = penalty_net_section_scale,
         penalty_kinematic_scale   = penalty_kinematic_scale,
         penalty_buckling_scale    = penalty_buckling_scale,
+        ood_tolerance             = ood_tolerance,
+        ood_penalty_scale         = ood_penalty_scale,
         device                    = device,
     )
 
