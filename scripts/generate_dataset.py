@@ -88,6 +88,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--out-dir", metavar="PATH", default=str(DEFAULT_OUT_DIR),
         help="Directory where all CSV files are written.",
     )
+    parser.add_argument(
+        "--log-level", metavar="LEVEL", default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging verbosity.",
+    )
     return parser
 
 
@@ -161,6 +166,7 @@ def run(config_path, seed, out_dir: Path) -> None:
 def main() -> None:
     parser = _build_parser()
     args   = parser.parse_args()
+    logging.getLogger().setLevel(args.log_level)
     out_dir = Path(args.out_dir).resolve()
 
     try:
