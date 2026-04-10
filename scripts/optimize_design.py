@@ -13,6 +13,7 @@ baseline.yaml is automatically respected here — no duplication.
 """
 
 import argparse
+import json
 import logging
 import random
 import sys
@@ -74,6 +75,12 @@ def _parse_args():
         '--log-level',
         default='INFO',
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+    )
+    p.add_argument(
+        '--out-json',
+        default='data/results/candidates.json',
+        metavar='PATH',
+        help='Write top-N candidate dicts to this JSON file (for summarize_results.py).',
     )
     return p.parse_args()
 
@@ -139,6 +146,13 @@ def main():
     )
 
     _print_results(results)
+
+    # Write candidates to JSON so summarize_results.py can run physics validation
+    out_json = Path(args.out_json)
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_json, 'w') as fh:
+        json.dump(results, fh, indent=2)
+    logging.getLogger('optimize_design').info("Candidates written to %s", out_json)
 
 
 if __name__ == '__main__':

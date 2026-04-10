@@ -66,9 +66,22 @@ constraints:
   ood_tolerance:     0.1
   ood_penalty_scale: 10.0
 
+  # ROM (stroke) constraint.
+  # All training data satisfies ROM = 250 mm ± 0.5 mm.  Without this penalty the
+  # optimizer can freely pick r values that produce wildly different strokes while
+  # still getting high surrogate pass_prob (the model learned structural pass/fail,
+  # not kinematics).  Violation = |ROM_actual - ROM_target| - ROM_tolerance (metres).
+  # penalty * violation_m * scale → at 50 mm error: 10 * 0.05 * 200 = 100 >> max_score.
+  penalty_rom_scale:  200.0
+
+  # QRR (quick-return ratio) constraint.
+  # All training data satisfies QRR ∈ [1.5, 2.5].  Violation = excess outside band
+  # (dimensionless).  penalty * violation * scale → at 0.5 excess: 10 * 0.5 * 20 = 100.
+  penalty_qrr_scale:  20.0
+
 optimizer:
   method:         differential_evolution
-  n_top_results:  10          # number of top-ranked geometries to report
+  n_top_results:  3           # number of top-ranked geometries to report
   seed:           42
   maxiter:        500         # max iterations for differential_evolution
   popsize:        15          # population size multiplier (total pop = popsize × n_vars)

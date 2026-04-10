@@ -214,28 +214,101 @@ MECH390_ML_Model/
 
 ## 4. How to run
 
-```bash
-# One-time setup
-python3 -m venv .venv
-.venv/bin/pip install pandas scipy numpy pyyaml
+### One-time setup
 
-# Full pipeline — generates all 7 CSVs (kinematics, dynamics, stresses,
-# fatigue, buckling, passed_configs, failed_configs) in data/preview/
+```bash
+python3 -m venv .venv
+.venv/bin/pip install pandas scipy numpy pyyaml torch optuna scikit-learn
+```
+
+---
+
+### Full pipeline (recommended)
+
+Runs all three steps in sequence: data generation → surrogate training → design optimization.
+
+```bash
+# All defaults — reads baseline.yaml, writes to data/preview/, saves model to data/models/
+.venv/bin/python scripts/run_pipeline.py
+
+# With explicit options
+.venv/bin/python scripts/run_pipeline.py \
+    --generate-config configs/generate/baseline.yaml \
+    --train-config    configs/train/surrogate.yaml \
+    --optimize-config configs/optimize/search.yaml \
+    --seed            42 \
+    --out-dir         data/preview
+
+# Skip steps if outputs already exist
+.venv/bin/python scripts/run_pipeline.py --skip-datagen           # skip data generation
+.venv/bin/python scripts/run_pipeline.py --skip-datagen --skip-training  # optimize only
+```
+
+---
+
+### Step by step
+
+**Step 1 — Data generation** (physics simulation → 7 CSVs)
+
+```bash
+# All defaults (reads baseline.yaml, seed from config, writes to data/preview/)
 .venv/bin/python scripts/generate_dataset.py
 
-# With explicit config, seed, and output directory
+# With explicit options
 .venv/bin/python scripts/generate_dataset.py \
     --config  configs/generate/baseline.yaml \
     --seed    42 \
     --out-dir data/preview
-
-# Preview scripts (individual pipeline stages)
-.venv/bin/python3 scripts/preview_stage1.py --out-dir data/preview
-.venv/bin/python3 scripts/preview_stage2.py --out-dir data/preview
-.venv/bin/python3 scripts/preview_forces.py --out-dir data/preview
-
-# All scripts accept --config, --seed, --out-dir (and --max-2d for stage2/forces)
 ```
+
+Writes to `--out-dir`: `kinematics.csv`, `dynamics.csv`, `stresses.csv`, `fatigue.csv`,
+`buckling.csv`, `passed_configs.csv`, `failed_configs.csv`.
+
+**Step 2 — Surrogate training** (Optuna sweep → checkpoint)
+
+```bash
+# All defaults (reads surrogate.yaml, saves checkpoint to data/models/)
+.venv/bin/python scripts/train_model.py
+
+# With explicit options
+.venv/bin/python scripts/train_model.py \
+    --config configs/train/surrogate.yaml \
+    --seed   42
+```
+
+Saves to `data/models/`: `surrogate_best.pt`, `scaler.pkl`, `target_stats.json`.
+
+**Step 3 — Design optimization** (differential evolution → top-N candidates)
+
+```bash
+# All defaults
+.venv/bin/python scripts/optimize_design.py
+
+# With explicit options
+.venv/bin/python scripts/optimize_design.py \
+    --generate-config configs/generate/baseline.yaml \
+    --optimize-config configs/optimize/search.yaml \
+    --model           data/models/surrogate_best.pt
+```
+
+**Validate a specific candidate geometry** (bypasses Stage 1, runs full physics)
+
+```bash
+# Edit CANDIDATE dict at the top of the script first, then:
+.venv/bin/python scripts/validate_candidate.py --config configs/generate/baseline.yaml
+```
+
+---
+
+### Preview scripts (individual pipeline stages)
+
+```bash
+.venv/bin/python scripts/preview_stage1.py --out-dir data/preview   # 2D kinematics only
+.venv/bin/python scripts/preview_stage2.py --out-dir data/preview   # + 3D embodiment
+.venv/bin/python scripts/preview_forces.py --out-dir data/preview   # + force sweep
+```
+
+All preview scripts accept `--config`, `--seed`, `--out-dir` (and `--max-2d` for stage2/forces).
 
 ---
 

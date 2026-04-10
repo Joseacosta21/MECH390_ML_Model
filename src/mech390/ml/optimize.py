@@ -46,6 +46,7 @@ from scipy.optimize import differential_evolution
 from mech390.ml import features as F
 from mech390.ml.models import build_model_from_hparams, load_checkpoint
 from mech390.physics import buckling as _buckling
+from mech390.physics import kinematics as _kinematics
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,12 @@ def _build_score_fn(
     penalty_buckling_scale:    float = 1.0,
     ood_tolerance:            float = 0.1,
     ood_penalty_scale:        float = 10.0,
+    rom_target:               float = 0.25,
+    rom_tolerance:            float = 0.0005,
+    qrr_min:                  float = 1.5,
+    qrr_max:                  float = 2.5,
+    penalty_rom_scale:        float = 200.0,
+    penalty_qrr_scale:        float = 20.0,
     device:                   torch.device = torch.device('cpu'),
 ):
     """
@@ -119,6 +126,11 @@ def _build_score_fn(
        near-zero net sections that produce ~TPa stresses in the physics engine)
     3. l > r + e  (kinematic feasibility: rod must bridge crank to slider at all angles)
     4. Euler buckling FoS >= n_buck_min  (analytical estimate from rod geometry)
+    5. |ROM - rom_target| <= rom_tolerance  (stroke must match 250 mm ± 0.5 mm;
+       all training data satisfies this — without the penalty the optimizer freely
+       picks r values that produce wildly wrong strokes)
+    6. qrr_min <= QRR <= qrr_max  (quick-return ratio in [1.5, 2.5];
+       same reasoning as ROM — training data is entirely within this band)
        Uses P_cr = π²EI/l² and a conservative F_rod estimate from slider dynamics.
 
     OOD penalty:
@@ -225,6 +237,29 @@ def _build_score_fn(
         if buck_violation > 0:
             score -= penalty * buck_violation * penalty_buckling_scale
 
+        # Hard constraint 5 & 6: ROM and QRR
+        # Every training sample satisfies ROM = 250 mm ± 0.5 mm and QRR ∈ [1.5, 2.5].
+        # Without these penalties the optimizer freely picks r values that produce
+        # wildly wrong strokes — the surrogate pass_prob is blind to kinematics.
+        # kinematics.calculate_metrics() is the same formula used by Stage 1 and
+        # the physics engine, so no inconsistency is introduced.
+        kin_metrics = _kinematics.calculate_metrics(x[_R_IDX], x[_L_IDX], x[_E_IDX])
+        if not kin_metrics.get('valid', False):
+            # Geometry invalid for kinematics (e.g. sqrt of negative): heavy penalty
+            score -= penalty * 1.0 * (penalty_rom_scale + penalty_qrr_scale)
+        else:
+            rom_actual = kin_metrics['ROM']
+            rom_err    = abs(rom_actual - rom_target) - rom_tolerance
+            if rom_err > 0:
+                score -= penalty * rom_err * penalty_rom_scale
+
+            qrr_actual = kin_metrics['QRR']
+            qrr_low    = max(0.0, qrr_min - qrr_actual)
+            qrr_high   = max(0.0, qrr_actual - qrr_max)
+            qrr_viol   = qrr_low + qrr_high
+            if qrr_viol > 0:
+                score -= penalty * qrr_viol * penalty_qrr_scale
+
         return -score   # scipy minimises, we want to maximise score
 
     return _score
@@ -293,10 +328,19 @@ def run_optimization(
     penalty_buckling_scale     = float(constraint_cfg.get('penalty_buckling_scale',    1.0))
     ood_tolerance              = float(constraint_cfg.get('ood_tolerance',             0.1))
     ood_penalty_scale          = float(constraint_cfg.get('ood_penalty_scale',         10.0))
+    penalty_rom_scale          = float(constraint_cfg.get('penalty_rom_scale',         200.0))
+    penalty_qrr_scale          = float(constraint_cfg.get('penalty_qrr_scale',         20.0))
+
+    # ROM and QRR targets (from operating config — same values Stage 1 enforces)
+    operating_cfg = gen_cfg.get('operating', {})
+    rom_target    = float(operating_cfg.get('ROM', 0.25))
+    rom_tolerance = float(operating_cfg.get('ROM_tolerance', 0.0005))
+    qrr_cfg       = operating_cfg.get('QRR', {})
+    qrr_min_v     = float(qrr_cfg.get('min', 1.5)) if isinstance(qrr_cfg, dict) else 1.5
+    qrr_max_v     = float(qrr_cfg.get('max', 2.5)) if isinstance(qrr_cfg, dict) else 2.5
 
     # Analytical buckling parameters (from material + operating config)
     material_cfg    = gen_cfg.get('material', {})
-    operating_cfg   = gen_cfg.get('operating', {})
     limits_cfg      = gen_cfg.get('limits', {})
     E_mat   = float(material_cfg.get('E',   73.1e9))
     rpm_val = float(operating_cfg.get('RPM', 30))
@@ -321,6 +365,12 @@ def run_optimization(
         penalty_buckling_scale    = penalty_buckling_scale,
         ood_tolerance             = ood_tolerance,
         ood_penalty_scale         = ood_penalty_scale,
+        rom_target                = rom_target,
+        rom_tolerance             = rom_tolerance,
+        qrr_min                   = qrr_min_v,
+        qrr_max                   = qrr_max_v,
+        penalty_rom_scale         = penalty_rom_scale,
+        penalty_qrr_scale         = penalty_qrr_scale,
         device                    = device,
     )
 
