@@ -124,19 +124,9 @@ def run(config_path, seed, out_dir: Path) -> None:
     # ---- Run pipeline --------------------------------------------------------
     logger.info("Starting full pipeline …")
     t0 = time.perf_counter()
-    result = generate_dataset(config, seed=seed)
+    # Pass out_dir to leverage memory-efficient chunked writes directly
+    result = generate_dataset(config, seed=seed, out_dir=out_dir)
     elapsed = time.perf_counter() - t0
-
-    # ---- Write CSVs ----------------------------------------------------------
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    written = []
-    for attr, filename in _OUTPUTS:
-        df = getattr(result, attr)
-        out_path = out_dir / filename
-        df.to_csv(out_path, index=False)
-        written.append((filename, len(df), out_path))
-        logger.info("Wrote %s — %d rows → %s", filename, len(df), out_path)
 
     # ---- Summary -------------------------------------------------------------
     s = result.summary
@@ -146,15 +136,13 @@ def run(config_path, seed, out_dir: Path) -> None:
     logger.info("  Stage-1 valid 2D designs  : %10s", f"{s.get('n_stage1', '?'):,}" if isinstance(s.get('n_stage1'), int) else "?")
     logger.info("  Stage-2 3D candidates     : %10s", f"{s.get('n_stage2', '?'):,}" if isinstance(s.get('n_stage2'), int) else "?")
     logger.info("  Dropped (physics errors)  : %10s", f"{s.get('n_dropped', '?'):,}" if isinstance(s.get('n_dropped'), int) else "?")
-    logger.info("  Duplicates removed        : %10,d", s.get('n_duplicates_removed', 0))
+    logger.info("  Duplicates removed        : %10s", f"{s.get('n_duplicates_removed', 0):,}")
     logger.info("  Evaluated                 : %10s", f"{s.get('n_evaluated', '?'):,}" if isinstance(s.get('n_evaluated'), int) else "?")
     logger.info("  Passed                    : %10s", f"{s.get('n_passed', '?'):,}" if isinstance(s.get('n_passed'), int) else "?")
     logger.info("  Failed                    : %10s", f"{s.get('n_failed', '?'):,}" if isinstance(s.get('n_failed'), int) else "?")
     logger.info("  Pass rate                 : %10.1f%%", s.get('pass_rate', 0.0) * 100)
     logger.info("  Wall time                 : %10.2f s", elapsed)
-    logger.info("  Output files:")
-    for filename, nrows, path in written:
-        logger.info("    %-25s  %6,d rows  →  %s", filename, nrows, path)
+    logger.info("  Output files exported to  : %s", out_dir)
     logger.info("=" * 68)
 
     if s.get('n_evaluated', 0) == 0:
