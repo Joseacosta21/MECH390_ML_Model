@@ -186,6 +186,7 @@ def run(config_path: str) -> None:
     _H = _r + max(_r, _e + _s_h / 2.0)
     _L = _r + float(np.sqrt(max((_r + _l)**2 - _e**2, 0.0))) + _s_l / 2.0
     design_eval['volume_envelope'] = _T * _H * _L
+    design_eval['slider_height']  = _s_h   # slider OOP thickness (z) — needed by _pin_stresses bearing at C
 
     design_eval.update(_mat)
     design_eval.update(_sa)

@@ -186,7 +186,11 @@ Pick subagent(s) based on request. Run multiple agents in parallel when independ
 
 ## Known Issues (Physics)
 
-**Sign convention at Pin A (deferred):** `stresses.py:139–140` defines `F_r,crank,A` and `F_t,crank,A` with opposite signs to Mother Doc Eqs. 2.5–2.6. No numerical impact while `abs()` wrapping used throughout crank stress path. See `STRESS_AUDIT.md` Section 10.
+**Sign convention at Pin A (deferred):** `stresses.py:139–140` defines `F_r,crank,A` and `F_t,crank,A` with opposite signs to Mother Doc Eqs. 2.5–2.6. No numerical impact while `abs()` wrapping used throughout crank stress path.
+
+**OOP bending model (settled):** `M_eta = F_r_B · i_offset` is **constant along rod and crank** — no `(1 − ξ/L)` decay. System fully planar (Newton-Euler 2D), no ζ pin reactions → no lateral force couple → no moment gradient. Any code or doc showing linear decay is wrong.
+
+**Gravity bending removed from rod and crank:** self-weight enters F_A, F_B, F_C via Newton-Euler. Separate UDL gravity bending double-counted it — removed from both `_rod_stresses` and `_crank_stresses`.
 
 ## Optimizer Constraints Implemented
 
