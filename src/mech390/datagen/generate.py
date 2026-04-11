@@ -344,7 +344,8 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
             + design_eval.get('mass_slider', 0.0)
         )
         _slider_cfg = config.get('geometry', {}).get('slider', {})
-        _s_h = float(_slider_cfg.get('height', 0.02))   # slider block height (z) [m]
+        _s_h = float(_slider_cfg.get('height', 0.02))   # slider block height (y) [m] — vertical extent
+        _s_w = float(_slider_cfg.get('width',  0.02))   # slider block width (z) [m]  — OOP thickness for Pin C bearing
         _s_l = float(_slider_cfg.get('length', 0.02))   # slider block length (x) [m]
         _r   = float(design_eval['r'])
         _l   = float(design_eval['l'])
@@ -372,7 +373,7 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
         #   Right: slider pin C at maximum extension x = sqrt((r+l)² - e²), plus half slider block
         _L = _r + float(np.sqrt(max((_r + _l)**2 - _e**2, 0.0))) + _s_l / 2.0
         design_eval['volume_envelope'] = _T * _H * _L
-        design_eval['slider_height']  = _s_h   # slider OOP thickness (z) — needed by _pin_stresses bearing at C
+        design_eval['slider_height']  = _s_w   # slider OOP thickness (z, width in YAML) — needed by _pin_stresses bearing at C
 
         # --- Inject material + stress-analysis constants ---
         design_eval.update(_mat)

@@ -31,7 +31,11 @@ import pandas as pd
 import torch
 
 from mech390.ml import features as F
-from mech390.ml.models import build_model_from_hparams, load_checkpoint
+from mech390.ml.models import (
+    build_model_from_hparams,
+    load_checkpoint,
+    validate_checkpoint_version,
+)
 
 
 class SurrogatePredictor:
@@ -53,6 +57,7 @@ class SurrogatePredictor:
     ):
         self.device = torch.device(device)
         ckpt        = load_checkpoint(checkpoint, device=device)
+        validate_checkpoint_version(ckpt)
 
         ckpt_n_reg = ckpt['hparams'].get('n_reg_targets')
         if ckpt_n_reg != len(F.REGRESSION_TARGETS):
@@ -94,6 +99,9 @@ class SurrogatePredictor:
             df = pd.DataFrame(design)
         else:
             df = design.copy()
+
+        # Derive slenderness features before checking for INPUT_FEATURES presence
+        df = F.derive_input_features(df)
 
         missing = [c for c in F.INPUT_FEATURES if c not in df.columns]
         if missing:

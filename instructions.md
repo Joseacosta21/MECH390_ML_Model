@@ -432,6 +432,20 @@ Config loading: numeric normalization (incl. scientific notation) and range vali
 - `M_eta_rod = |F_r_B| · i_offset` (constant, same at B and C)
 - Torsion: `T_rod = |F_t_C| · i_offset` (Eq 5.6)
 
+**Crank normal stress model (current — Eqs 6.7b / 6.7c):**
+- Gravity distributed bending removed (same reason as rod)
+- `M_eta_crank = F_r_crank_B · i_offset` constant along crank (no ζ reactions)
+- Corner at Pin B: `σ = |F_r_B|/A_c + M_zeta_max_B·c_zc/I_zc + M_eta_crank·c_yc/I_yc`
+- Corner at Pin A: `σ = |F_r_A|/A_c + M_zeta_max_A·c_zc/I_zc + T_in·c_zc/I_zc + M_eta_crank·c_yc/I_yc`
+- `T_in` enters as in-plane bending at A (NOT bar torsion: `T_in·ẑ · crank_axis = 0`)
+
+**Pin stress model (current):**
+- `slider_height` injected into design dict by `generate.py` and `validate_candidate.py` (reads from `config.geometry.slider.height`)
+- Pin B bending: `M_pin_B = |F_B| · max(t_crank, t_rod) / 2` — governs by larger lug arm
+- Shaft A torsion: `tau_shaft_A_torsion = 16·T_in / (π·d_shaft_A³)` — T_in directly at shaft
+- Combined shear at A: `tau_pin_A_total = tau_pin_A + tau_shaft_A_torsion`
+- Bearing at Pin C: rod side `F_r_rod_C / (2·D_pC·t_rod)` + slider side `F_r_rod_C / (D_pC·slider_height)` — both in max block
+
 #### `fatigue.py` ✅ Implemented
 
 - `evaluate(sigma_rod_hist, tau_rod_hist, sigma_crank_hist, tau_crank_hist, sigma_pin_hist, tau_pin_hist, design)` → per-component fatigue dict

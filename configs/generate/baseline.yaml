@@ -46,8 +46,8 @@ operating:
 
 sampling:
   method: latin_hypercube          # latin_hypercube | random | grid
-  n_samples: 1000            # ignored for grid
-  n_variants_per_2d: 10
+  n_samples: 1000            # total number of 2D samples (r, l, e) to generate
+  n_variants_per_2d: 100     # number of 3D variants (widths, thicknesses, pin diameters) to generate per 2D sample
   constraints:
     - "r > 0"
     - "l > 0"
@@ -61,7 +61,7 @@ stress_analysis:
   # Minimum wall thickness on each side of a pin hole (m).
   # Net-section constraint: width > D_pin + delta + 2 * min_wall
   # At 0.5 mm per side, a 2 mm pin in a 4 mm link leaves 1.0 mm net section.
-  min_wall_mm: 0.5e-3              # 0.5 mm (m)
+  min_wall_m: 0.5e-3               # 0.5 mm expressed in metres
 
   # Stress concentration factors (dimensionless)
   # Kt_lug:          single-shear round-ended lug (Mother Doc Section 8.1)

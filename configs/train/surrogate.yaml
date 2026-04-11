@@ -42,12 +42,15 @@ features:
 # Hyperparameter search space (Optuna samples from these ranges)
 # ---------------------------------------------------------------------------
 model:
-  hidden_sizes_options:         # discrete architecture choices
+  hidden_sizes_options:         # discrete architecture choices (expanded for 10k-row dataset)
     - [64, 64]
     - [128, 128]
     - [256, 128]
     - [256, 128, 64]
     - [512, 256, 128]
+    - [512, 256, 128, 64]
+    - [1024, 512, 256, 128]
+    - [1024, 512, 256, 128, 64]
   dropout_range: [0.0, 0.3]     # uniform range
   use_batch_norm: true          # fixed — always on
 
@@ -68,6 +71,16 @@ optuna:
 loss_weights:
   bce: 1.0
   mse: 0.5
+
+# Learning rate schedule applied during training.
+# type: cosine_annealing — CosineAnnealingLR, steps once per epoch.
+# T_max: number of epochs for one cosine half-cycle (set ~= max_epochs / 2).
+# eta_min: minimum LR at the trough of the cosine.
+# Set type to anything else (or omit) to disable scheduling.
+lr_schedule:
+  type:    cosine_annealing
+  T_max:   150
+  eta_min: 1.0e-6
 
 # Where to save the best checkpoint and scaler
 output:
