@@ -197,25 +197,19 @@ def main() -> None:
         _run_step("Surrogate training", cmd)
 
     # ------------------------------------------------------------------
-    # Step 3 — Design optimization
+    # Step 3 — Design optimization + pre-manufacturing report
+    # optimize_design.py runs physics validation inline and prints the
+    # unified report — no separate summarize_results.py step needed.
     # ------------------------------------------------------------------
     cmd = [python, "scripts/optimize_design.py",
            "--generate-config", args.generate_config,
            "--optimize-config", args.optimize_config,
            "--out-json",        args.candidates_json,
+           "--top",             str(args.top),
            "--log-level",       args.log_level]
     if args.seed is not None:
         cmd += ["--seed", str(args.seed)]
-    _run_step("Design optimization", cmd)
-
-    # ------------------------------------------------------------------
-    # Step 4 — Manufacturing report (physics validation of top candidates)
-    # ------------------------------------------------------------------
-    cmd = [python, "scripts/summarize_results.py",
-           "--candidates", args.candidates_json,
-           "--config",     args.generate_config,
-           "--top",        str(args.top)]
-    _run_step("Manufacturing report", cmd)
+    _run_step("Design optimization + manufacturing report", cmd)
 
     # ------------------------------------------------------------------
     # Done

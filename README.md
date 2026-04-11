@@ -329,26 +329,31 @@ No open bugs.
 
 ### ML pipeline
 
-- [ ] **Split regression training (ML-P8)** — classification head trains on all data (pass + fail); regression heads should train only on passing rows. Regression targets are only physically meaningful for passing designs — training on fail configs adds noise to the regression heads. Implementation: add a second filtered DataLoader (`pass_fail == 1`) and feed it to the regression MSE step only. The pass_prob gate in the optimizer still relies on the classification head seeing both classes.
+- [x] **Split regression training (ML-P8)** — per-batch masking in `train.py`: MSE loss computed only on pass rows within each mini-batch; fail rows contribute zero to regression gradient
+- [x] **Remove `min_n_static` from optimizer objectives (ML-P3)** — removed from `search.yaml`; weights redistributed: `total_mass=0.15`, `volume_envelope=0.30`, `tau_A_max=0.30`, `E_rev=0.25`
+- [x] **Refactor features (ML-P4)** — added `slenderness_r = r/thickness_r` and `slenderness_l = l/thickness_l` to `INPUT_FEATURES` (now 12); `RAW_GEO_KEYS` constant (10) preserves optimizer search space; `derive_input_features()` + `raw_to_model_input()` helpers added; `REGRESSION_TARGETS` unchanged
+- [x] **Update model defaults after ML-P4 (ML-P5)** — `input_dim` default in `models.py` unchanged (train.py derives from `len(F.INPUT_FEATURES)` dynamically); no hardcoded dims in training path
+- [x] **Restrict architecture search space (ML-P6)** — expanded for 10k rows: added `[512,256,128,64]`, `[1024,512,256,128]`, `[1024,512,256,128,64]` to `surrogate.yaml`
+- [x] **Add learning rate schedule (ML-P7)** — `CosineAnnealingLR` added to `train.py`; configurable via `lr_schedule` section in `surrogate.yaml` (`T_max=150`, `eta_min=1e-6`)
+- [x] **Validate regression quality** — val R² printed per regression target after each training run (added to `run_training()` in `train.py`)
+- [x] **Fix target normalisation (8.1)** — `normalize_targets()` warns on OOR values; `warn=False` default suppresses noise on train set (fail rows below pass-only range expected); `warn=True` used for val/test only
+- [x] **Stratify regression targets in split (8.2)** — `split_dataset()` logs a warning when any regression target mean differs >20% between train and val
+- [x] **Add checkpoint version field (8.5)** — `CHECKPOINT_VERSION = 1` in `models.py`; `save_checkpoint()` writes it; `validate_checkpoint_version()` called in `infer.py` and `optimize.py` — warns on missing (old checkpoint), raises on mismatch
 
+### ~~🔴~~ ✅ Top priority — optimizer output quality (resolved)
 
-- [ ] **Remove `min_n_static` from optimizer objectives (ML-P3)** — `search.yaml` still lists `min_n_static`; designs with thin fatigue-failing cranks show paradoxically high static FOS, inverting the optimization direction; remove it and redistribute its weight to `total_mass` and `volume_envelope`
+- [x] **Get surrogate optimizer producing physically valid Rank 1 candidates** — resolved. Both top candidates PASS full physics validation (val_f1=0.9715, arch=[512,256,128,64]). Subtasks:
+  - [x] **[CRITICAL] `target_stats` computed on all rows** — fixed in `features.py:compute_target_stats()`: now filters to `pass_fail == 1` rows only before computing min/max. Requires retrain + re-optimize.
+  - [x] **[CRITICAL] Filter top-N candidates by pass_prob** — fixed in `optimize.py`: candidates below `pass_threshold` or with non-positive score skipped before dedup; fallback warns and returns best-by-score if optimizer found nothing.
+  - [x] **[HIGH] 6 of 12 physics checks invisible to optimizer** — `min_n_fatigue = min(n_rod, n_crank, n_pin)` added to `REGRESSION_TARGETS` in `features.py` and as highest-weight objective (0.40, maximize) in `search.yaml`. Requires retrain.
+  - [x] **[HIGH] Raise `pass_fail_prob_min`** — raised `0.90 → 0.95` in `search.yaml`.
+  - [x] **[MEDIUM] Val MSE inconsistent with ML-P8** — same pass-mask now applied in val loop in `train.py`. Requires retrain.
+  - [x] **[MEDIUM] Config key mismatch in `optimize.py`** — `"P"` → `"m_block"` fixed.
 
-- [ ] **Refactor features (ML-P4)** — *originally written for 200-row dataset; re-evaluate at 10k rows.* Consider dropping `n_buck`, `utilization`, `min_n_static` from `REGRESSION_TARGETS` (n_buck enforced analytically in optimizer); consider adding `slenderness_r = r/thickness_r`, `slenderness_l = l/thickness_l`, `net_section_r = width_r - d_shaft_A` to `INPUT_FEATURES`
+### ML regression quality
 
-- [ ] **Update model defaults after ML-P4 (ML-P5)** — after ML-P4 is applied, update `input_dim` and `n_reg_targets` defaults in `models.py`; note `train.py` already derives these dynamically from `features.py` so defaults are only fallbacks
-
-- [ ] **Restrict architecture search space (ML-P6)** — *originally written for 200-row dataset; re-evaluate at 10k rows.* `[256, 128, 64]` is the current best-performing architecture and may remain appropriate
-
-- [ ] **Add learning rate schedule (ML-P7)** — `train.py`: add `CosineAnnealingLR(optimizer, T_max=150)` after Adam definition
-
-- [ ] **Validate regression quality** — val R² not yet confirmed for `total_mass`, `volume_envelope`, `tau_A_max`, `n_buck`, `utilization`
-
-- [ ] **Fix target normalisation (8.1)** — target stats computed on train set; values outside training range are silently clipped; add explicit out-of-range warning or switch to StandardScaler
-
-- [ ] **Stratify regression targets in split (8.2)** — train/val split only stratifies on `pass_fail`; add warning if any regression target distribution is severely skewed across splits
-
-- [ ] **Add checkpoint version field (8.5)** — add a `version` key to `save_checkpoint()` and validate it in `build_model_from_hparams()` so schema changes are caught at load time
+- [x] **Val R² was computed on all rows** — root cause found: R² logging used full val set (pass + fail), but model trained only on pass rows (ML-P8). Fail designs have wildly different `tau_A_max`/`E_rev`/`utilization` distributions → R²≈0 on mixed set. Fixed in `train.py`: R² now computed on pass rows only. True pass-only R²: `total_mass`=0.83, `volume_envelope`=0.82, `E_rev`=0.90, `tau_A_max`=0.63, `utilization`=0.68, `n_buck`=0.72, `n_shaft`=0.89, `min_n_fatigue`=0.75.
+- [x] **Unified pre-manufacturing terminal output** — `summarize_results.run()` called inline by `optimize_design.py`; Step 4 removed from `run_pipeline.py`. No redundant output between optimizer and report.
 
 ### Optimization and visualization
 
@@ -368,12 +373,12 @@ No open bugs.
 
 ### Code hygiene
 
-- [ ] **Unified logging (9.1)** — replace remaining `print()` calls in `generate_dataset.py:136–137` with `logger.info()`; ensure all entry-point scripts configure a root logger
+- [x] **Unified logging (9.1)** — summary `print()` block in `generate_dataset.py` converted to `logger.info()`
 - [ ] **Type annotations (9.2)** — add type hints to physics modules (dynamics.py, stresses.py, fatigue.py, buckling.py); configure mypy or pyright in pyproject.toml
 - [ ] **Symbol naming consistency (9.3)** — standardize rod dimension names: `generate.py` uses `w_rod`/`t_rod`; `stresses.py` uses `width`/`thickness`; `buckling.py` uses `w`/`t`; pick one convention across all physics files
 - [ ] **Remaining magic numbers (9.4)** — document or name: `1e-12` epsilon in `dynamics.py` (singular-matrix guard), `0.01` dedup tolerance in `optimize.py`, `0.808` in `fatigue.py` (Marin reliability factor)
 - [ ] **Docstring format (9.5)** — enforce a consistent docstring style (Google or NumPy) across all modules in `src/mech390/`; physics modules have inconsistent or missing parameter docs
-- [ ] **`min_wall_mm` unit clarity (6.2)** — `stress_analysis.min_wall_mm` is stored in mm in YAML but used internally in metres; rename to `min_wall_m` in YAML and remove the conversion, or add explicit `_mm` suffix comments everywhere it is read
+- [x] **`min_wall_mm` unit clarity (6.2)** — renamed to `min_wall_m` in `baseline.yaml` and all 4 readers (`stage2_embodiment.py`, `optimize.py`, `summarize_results.py`, `validate_candidate.py`)
 - [ ] **Scaler path assumption in infer.py (8.6)** — `SurrogatePredictor` infers scaler path from checkpoint path using string replacement; brittle if directory layout changes; accept explicit `scaler_path` argument instead
 - [ ] **`design_eval` god object (2.1 / 3.1)** — deferred: `design_eval` is a flat dict assembled in `generate.py` and consumed by the full physics stack; splitting it into typed sub-dicts would improve IDE support; tracked for future refactor when schema stabilises
 
@@ -401,16 +406,17 @@ No open bugs.
 
 | Item | Value |
 |---|---|
-| Best val F1 | **0.9713** |
-| Architecture | `[256, 128, 64]` shared ReLU trunk + classification head + 8-target regression head |
-| Dropout | 0.299 |
-| Learning rate | 9.17 × 10⁻³ |
-| Batch size | 128 |
+| Best val F1 | **0.9704** |
+| Architecture | `[512, 256, 128]` shared ReLU trunk + classification head + 9-target regression head |
+| Dropout | 0.269 |
+| Learning rate | 8.26 × 10⁻³ |
+| Batch size | 256 |
 | Optuna sweep | 50 trials × 300 epochs max, patience=25 |
 | Early stopping | On `val_f1` (not `val_loss`) |
 | Checkpoint | `data/models/surrogate_best.pt` |
 | Scaler | `data/models/scaler.pkl` |
 | Target stats | `data/models/target_stats.json` |
+| Val R² (pass rows only) | `E_rev`=0.90, `n_shaft`=0.89, `total_mass`=0.83, `volume_envelope`=0.82, `min_n_fatigue`=0.75, `n_buck`=0.72, `utilization`=0.68, `tau_A_max`=0.63, `min_n_static`=0.63 |
 
 **Permanent architecture decisions (not dataset-size-dependent):**
 - Early stopping on `val_f1` — saves the best-classified model; regression loss can continue falling after classification peaks, so stopping on `val_loss` discards the optimal pass/fail epoch

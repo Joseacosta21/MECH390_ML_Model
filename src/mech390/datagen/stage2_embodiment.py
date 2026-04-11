@@ -137,7 +137,7 @@ def iter_expand_to_3d(
     # min_net_section = delta + 2 * min_wall (ensures non-zero material around every hole)
     stress_cfg   = config.get("stress_analysis") or {}
     delta_m      = float(stress_cfg.get("diametral_clearance_m", 1e-4))
-    min_wall_m   = float(stress_cfg.get("min_wall_mm", 0.5e-3))
+    min_wall_m   = float(stress_cfg.get("min_wall_m", 0.5e-3))
     min_net_section = delta_m + 2.0 * min_wall_m
 
     for design_idx, design_2d in enumerate(valid_2d_designs):

@@ -44,14 +44,21 @@ import torch
 from scipy.optimize import differential_evolution
 
 from mech390.ml import features as F
-from mech390.ml.models import build_model_from_hparams, load_checkpoint
+from mech390.ml.models import (
+    build_model_from_hparams,
+    load_checkpoint,
+    validate_checkpoint_version,
+)
 from mech390.physics import buckling as _buckling
 from mech390.physics import kinematics as _kinematics
 
 logger = logging.getLogger(__name__)
 
-# Fixed order of the 10 geometry variables — must match INPUT_FEATURES
-_GEO_KEYS = F.INPUT_FEATURES  # ['r', 'l', 'e', 'width_r', ...]
+# Raw geometry variables the optimizer searches over (10-dim).
+# These define the differential_evolution bounds and the result dict keys.
+# Distinct from F.INPUT_FEATURES (12-dim) which also includes derived
+# slenderness features — see F.raw_to_model_input() for the conversion.
+_GEO_KEYS = F.RAW_GEO_KEYS  # ['r', 'l', 'e', 'width_r', ...]
 
 # Map from objective name → index in REGRESSION_TARGETS
 _OBJ_IDX = {name: i for i, name in enumerate(F.REGRESSION_TARGETS)}
@@ -164,7 +171,9 @@ def _build_score_fn(
     model.eval()
 
     def _score(x: np.ndarray) -> float:
-        x_norm = scaler.transform(x.reshape(1, -1)).astype(np.float32)
+        # x is 10-dim (RAW_GEO_KEYS); extend to 12-dim INPUT_FEATURES before scaling
+        x_full = F.raw_to_model_input(x)
+        x_norm = scaler.transform(x_full.reshape(1, -1)).astype(np.float32)
         x_t    = torch.from_numpy(x_norm).to(device)
 
         with torch.no_grad():
@@ -297,6 +306,7 @@ def run_optimization(
 
     # --- Load model ---
     ckpt   = load_checkpoint(checkpoint, device=str(device))
+    validate_checkpoint_version(ckpt)
     model  = build_model_from_hparams(ckpt['hparams'])
     model.load_state_dict(ckpt['model_state_dict'])
     model.eval()
@@ -318,7 +328,7 @@ def run_optimization(
     # Net-section constraint: width - D_pin > delta + 2 * min_wall
     stress_cfg      = gen_cfg.get('stress_analysis', {})
     delta_m         = float(stress_cfg.get('diametral_clearance_m', 1e-4))
-    min_wall_m      = float(stress_cfg.get('min_wall_mm', 0.5e-3))
+    min_wall_m      = float(stress_cfg.get('min_wall_m', 0.5e-3))
     min_net_section = delta_m + 2.0 * min_wall_m
 
     # Penalty scaling factors (from search.yaml constraints section)
@@ -345,7 +355,7 @@ def run_optimization(
     E_mat   = float(material_cfg.get('E',   73.1e9))
     rpm_val = float(operating_cfg.get('RPM', 30))
     omega_v = rpm_val * 2.0 * 3.14159265 / 60.0
-    m_blk   = float(operating_cfg.get('P',   0.5))
+    m_blk   = float(operating_cfg.get('m_block', 0.5))
     mu_v    = float(operating_cfg.get('mu',  0.47))
     g_v     = float(operating_cfg.get('g',   9.81))
     nbuck_min = float(limits_cfg.get('n_buck_min',
@@ -406,7 +416,8 @@ def run_optimization(
     # Score all candidates, sort, deduplicate
     scored = []
     for x in candidates:
-        x_norm = scaler.transform(x.reshape(1, -1)).astype(np.float32)
+        x_full = F.raw_to_model_input(x)
+        x_norm = scaler.transform(x_full.reshape(1, -1)).astype(np.float32)
         x_t    = torch.from_numpy(x_norm)
         with torch.no_grad():
             logit, pred_reg = model(x_t)
@@ -426,10 +437,14 @@ def run_optimization(
 
     scored.sort(key=lambda r: r['weighted_score'], reverse=True)
 
-    # Remove near-duplicates (within 1% of range on all dims)
+    # Remove near-duplicates (within 1% of range on all dims).
+    # Only keep candidates that passed the surrogate gate (pass_prob >= threshold)
+    # and have a positive score — prevents degenerate candidates from filling slots.
     tol_abs = np.array([(hi - lo) * 0.01 for lo, hi in bounds])
     unique  = []
     for row in scored:
+        if row['pass_prob'] < pass_threshold or row['weighted_score'] <= 0:
+            continue
         x_row = np.array([row[k] for k in _GEO_KEYS])
         if all(
             np.any(np.abs(x_row - np.array([u[k] for k in _GEO_KEYS])) > tol_abs)
@@ -439,4 +454,95 @@ def run_optimization(
         if len(unique) >= n_top:
             break
 
+    if not unique:
+        # Fallback: optimizer found no gate-passing candidates — return best by score
+        logger.warning(
+            "No candidates passed pass_prob >= %.2f gate. "
+            "Returning top-%d by score regardless. Consider retraining.",
+            pass_threshold, n_top,
+        )
+        unique = scored[:n_top]
+
     return unique
+
+
+# ---------------------------------------------------------------------------
+# Dataset best finder
+# ---------------------------------------------------------------------------
+
+def find_dataset_best(
+    csv_pass_path: str,
+    objectives:   Dict[str, Dict[str, Any]],
+    target_stats: Dict[str, Dict[str, float]],
+) -> Dict[str, Any]:
+    """
+    Find the highest-scoring design in passed_configs.csv using the same
+    objective weights / normalisation as the surrogate optimizer (but using
+    actual physics values from the CSV, not surrogate predictions).
+
+    Returns a result dict in the same format as run_optimization():
+      - RAW_GEO_KEYS values
+      - pass_prob = 1.0  (it came from passed_configs)
+      - weighted_score   (objective-weighted score on actual physics values)
+      - pred_<target>    (actual CSV value, labelled as "CSV" in the report)
+      - source = 'dataset'
+
+    Returns None if the CSV is not found or empty.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        logger.error("pandas required for find_dataset_best()")
+        return None
+
+    p = Path(csv_pass_path)
+    if not p.exists():
+        logger.warning("Dataset best: passed CSV not found at %s", p)
+        return None
+
+    df = pd.read_csv(p)
+    if df.empty:
+        return None
+
+    # Derive composite targets if not already in CSV
+    if 'min_n_fatigue' not in df.columns:
+        fat_cols = [c for c in ('n_rod', 'n_crank', 'n_pin') if c in df.columns]
+        if fat_cols:
+            df['min_n_fatigue'] = df[fat_cols].min(axis=1)
+
+    if 'min_n_static' not in df.columns:
+        sta_cols = [c for c in ('n_static_rod', 'n_static_crank', 'n_static_pin') if c in df.columns]
+        if sta_cols:
+            df['min_n_static'] = df[sta_cols].min(axis=1)
+
+    def _score_row(row) -> float:
+        s = 0.0
+        for name, cfg in objectives.items():
+            if name not in row.index or name not in target_stats:
+                continue
+            raw   = float(row[name])
+            stats = target_stats[name]
+            rng   = stats['max'] - stats['min']
+            norm  = float(np.clip((raw - stats['min']) / rng if rng > 0 else 0.5, 0.0, 1.0))
+            w     = float(cfg['weight'])
+            s    += w * (1.0 - norm) if cfg['direction'] == 'minimize' else w * norm
+        return s
+
+    scores   = df.apply(_score_row, axis=1)
+    best_idx = int(scores.idxmax())
+    best_row = df.loc[best_idx]
+
+    result = {k: float(best_row[k]) for k in _GEO_KEYS if k in best_row.index}
+    result['pass_prob']      = 1.0
+    result['weighted_score'] = float(scores[best_idx])
+    result['source']         = 'dataset'
+
+    for target in F.REGRESSION_TARGETS:
+        result[f'pred_{target}'] = float(best_row[target]) if target in best_row.index else None
+
+    logger.info("Dataset best: score=%.4f  r=%.1f mm  l=%.1f mm  e=%.1f mm",
+                result['weighted_score'],
+                result.get('r', 0) * 1e3,
+                result.get('l', 0) * 1e3,
+                result.get('e', 0) * 1e3)
+    return result

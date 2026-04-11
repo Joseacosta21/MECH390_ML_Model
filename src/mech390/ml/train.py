@@ -84,6 +84,16 @@ def _train_one_trial(
     max_epochs = int(cfg['training']['max_epochs'])
     patience   = int(cfg['training']['patience'])
 
+    # ML-P7 — optional CosineAnnealingLR (configurable via surrogate.yaml)
+    sched_cfg = cfg.get('lr_schedule', {})
+    scheduler = None
+    if sched_cfg.get('type') == 'cosine_annealing':
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max   = int(sched_cfg.get('T_max', 150)),
+            eta_min = float(sched_cfg.get('eta_min', 1e-6)),
+        )
+
     best_val_f1   = 0.0
     best_state    = None
     no_improve    = 0
@@ -94,7 +104,16 @@ def _train_one_trial(
         for X_b, y_clf_b, y_reg_b in loaders['train']:
             X_b, y_clf_b, y_reg_b = X_b.to(device), y_clf_b.to(device), y_reg_b.to(device)
             logit, pred_reg = model(X_b)
-            loss = w_bce * bce_loss(logit, y_clf_b) + w_mse * mse_loss(pred_reg, y_reg_b)
+
+            # ML-P8 — regression loss only on passing rows within this batch.
+            # fail rows contribute zero to MSE gradient; clf loss uses full batch.
+            pass_mask = (y_clf_b.squeeze(1) == 1)
+            if pass_mask.any():
+                reg_loss = mse_loss(pred_reg[pass_mask], y_reg_b[pass_mask])
+            else:
+                reg_loss = torch.tensor(0.0, device=device)
+
+            loss = w_bce * bce_loss(logit, y_clf_b) + w_mse * reg_loss
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -107,8 +126,14 @@ def _train_one_trial(
             for X_b, y_clf_b, y_reg_b in loaders['val']:
                 X_b, y_clf_b, y_reg_b = X_b.to(device), y_clf_b.to(device), y_reg_b.to(device)
                 logit, pred_reg = model(X_b)
+                # Apply same pass-mask as training so val_loss is comparable
+                val_pass_mask = (y_clf_b.squeeze(1) == 1)
+                if val_pass_mask.any():
+                    val_reg_loss = mse_loss(pred_reg[val_pass_mask], y_reg_b[val_pass_mask])
+                else:
+                    val_reg_loss = torch.tensor(0.0, device=device)
                 val_loss += (
-                    w_bce * bce_loss(logit, y_clf_b) + w_mse * mse_loss(pred_reg, y_reg_b)
+                    w_bce * bce_loss(logit, y_clf_b) + w_mse * val_reg_loss
                 ).item()
                 all_probs.append(torch.sigmoid(logit).cpu().numpy())
                 all_labels.append(y_clf_b.cpu().numpy())
@@ -124,6 +149,10 @@ def _train_one_trial(
         precision = tp / (tp + fp + 1e-8)
         recall    = tp / (tp + fn + 1e-8)
         val_f1    = 2 * precision * recall / (precision + recall + 1e-8)
+
+        # ML-P7 — step LR schedule once per epoch (after validation)
+        if scheduler is not None:
+            scheduler.step()
 
         # Early stopping on val_f1 (the Optuna objective), not val_loss.
         # Saving on val_loss can discard the best-classified epoch when
@@ -227,8 +256,8 @@ def run_training(cfg: Dict[str, Any]) -> None:
 
     # Normalise regression targets to [0, 1] so MSE loss is not dominated
     # by targets with large physical scales (e.g. volume_envelope in m³).
-    y_reg_tr  = F.normalize_targets(y_reg_tr_raw,  target_stats)
-    y_reg_val = F.normalize_targets(y_reg_val_raw, target_stats)
+    y_reg_tr  = F.normalize_targets(y_reg_tr_raw,  target_stats, warn=False)  # fail rows below pass-only range: expected
+    y_reg_val = F.normalize_targets(y_reg_val_raw, target_stats, warn=True)   # val OOR is actionable
 
     default_bs = int(cfg['training']['batch_size_options'][1])  # middle option as default
     base_loaders = {
@@ -284,3 +313,25 @@ def run_training(cfg: Dict[str, Any]) -> None:
     logger.info("Saved stats      → %s", stats_path)
     print(f"\nTraining complete. Best val F1: {best_val_f1:.4f}")
     print(f"Best architecture: {best_hparms}")
+
+    # --- Val R² per regression target (pass rows only — consistent with ML-P8 masking) ---
+    best_model.eval()
+    all_preds_reg, all_true_reg = [], []
+    with torch.no_grad():
+        for X_b, y_clf_b, y_reg_b in base_loaders['val']:
+            _, pred_reg = best_model(X_b.to(device))
+            pass_mask = (y_clf_b.squeeze(1) == 1)
+            if pass_mask.any():
+                all_preds_reg.append(pred_reg[pass_mask].cpu().numpy())
+                all_true_reg.append(y_reg_b[pass_mask].numpy())
+
+    if all_preds_reg:
+        y_pred_all = np.vstack(all_preds_reg)
+        y_true_all = np.vstack(all_true_reg)
+        print("\nVal R\u00b2 per regression target (normalised space, pass rows only):")
+        for i, name in enumerate(F.REGRESSION_TARGETS):
+            ss_res = float(np.sum((y_true_all[:, i] - y_pred_all[:, i]) ** 2))
+            ss_tot = float(np.sum((y_true_all[:, i] - float(y_true_all[:, i].mean())) ** 2))
+            r2 = 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else float('nan')
+            logger.info("Val R\u00b2  %-22s  %.4f", name, r2)
+            print(f"  {name:<22}  {r2:.4f}")

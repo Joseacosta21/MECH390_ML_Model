@@ -1,26 +1,31 @@
 """
 summarize_results.py
 --------------------
-Read the top-N optimizer candidates from data/results/candidates.json,
-run full physics validation on each, and print a manufacturing-ready
-terminal report.
+Physics-validate the top optimizer candidates and print a unified
+pre-manufacturing report.
 
-The report answers the key question: "Is Rank 1 suitable for manufacture?"
-For each candidate it shows:
-  - Exact mechanism dimensions (r, l, e, widths, thicknesses, pin diameters)
-  - Surrogate predictions (pass_prob, predicted mass, torque, etc.)
-  - Physics engine results (ROM, QRR, static FoS, fatigue FoS, buckling FoS)
-  - Pass / fail verdict per check, plus overall PASS / FAIL
+Can be called standalone OR imported by optimize_design.py so that
+the full report is printed in a single pipeline run with no redundancy.
 
-Project specs (encoded in baseline.yaml):
-  ROM target: 250 mm ±0.5 mm  |  QRR: 1.5–2.5  |  Al 2024-T3
-  Load: 500 g at slider  |  RPM: 30  |  n_static ≥ 1  |  n_buck ≥ 3
-
-Usage
------
+Usage (standalone)
+------------------
   python scripts/summarize_results.py
   python scripts/summarize_results.py --candidates data/results/candidates.json \\
-                                      --config     configs/generate/baseline.yaml
+                                      --config     configs/generate/baseline.yaml \\
+                                      --top        3
+
+Report structure (per candidate)
+---------------------------------
+  RANK N  |  score  |  pass_prob  |  PASS / FAIL
+  ── Geometry ──────────────────────────────────
+    Two-column table: linkage dims left, cross-sections + pins right
+    ROM / QRR confirmation with spec check
+  ── Performance ───────────────────────────────
+    Surrogate-predicted vs physics-actual vs limit vs status
+    Rows with a surrogate prediction show calibration quality.
+    Physics-only rows (fatigue per link, Miner's) show "—" in Predicted.
+  ── Net-section margins ───────────────────────
+  ── Overall verdict ───────────────────────────
 """
 
 import argparse
@@ -29,7 +34,7 @@ import logging
 import math
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -46,8 +51,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("summarize_results")
 
-# Report column width
-W = 72
+W = 76   # report width
 
 
 # ---------------------------------------------------------------------------
@@ -57,40 +61,25 @@ W = 72
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="summarize_results",
-        description=(
-            "Physics-validate the top optimizer candidates and print a "
-            "manufacturing-ready terminal report."
-        ),
+        description="Physics-validate top optimizer candidates and print a pre-manufacturing report.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument(
-        "--candidates", "-c",
+    p.add_argument("--candidates", "-c",
         default=str(PROJECT_ROOT / "data" / "results" / "candidates.json"),
-        metavar="PATH",
-        help="JSON file written by optimize_design.py (top-N candidate dicts).",
-    )
-    p.add_argument(
-        "--config", "-g",
+        metavar="PATH", help="JSON written by optimize_design.py.")
+    p.add_argument("--config", "-g",
         default=str(PROJECT_ROOT / "configs" / "generate" / "baseline.yaml"),
-        metavar="PATH",
-        help="Generation config YAML (source of material, operating, limits).",
-    )
-    p.add_argument(
-        "--top", "-n",
-        type=int,
-        default=3,
-        metavar="N",
-        help="Number of ranked candidates to validate and report.",
-    )
+        metavar="PATH", help="Generation config YAML.")
+    p.add_argument("--top", "-n", type=int, default=3, metavar="N",
+        help="Number of candidates to validate.")
     return p
 
 
 # ---------------------------------------------------------------------------
-# Physics validation helpers (shared logic with validate_candidate.py)
+# Physics constants
 # ---------------------------------------------------------------------------
 
 def _load_constants(config: dict) -> dict:
-    """Extract all physics constants from config into a flat dict."""
     _ctx       = "summarize_results"
     operating  = config.get("operating", {})
     limits_cfg = config.get("limits", {})
@@ -117,7 +106,7 @@ def _load_constants(config: dict) -> dict:
     tau_limit   = 0.577 * sigma_limit
 
     delta      = float(get_or_warn(sa_cfg, "diametral_clearance_m", 1e-4,  context=_ctx))
-    min_wall   = float(get_or_warn(sa_cfg, "min_wall_mm",           0.5e-3, context=_ctx))
+    min_wall   = float(get_or_warn(sa_cfg, "min_wall_m",            0.5e-3, context=_ctx))
 
     return dict(
         rpm=rpm, omega=omega, sweep_step_deg=sweep_step_deg,
@@ -152,70 +141,36 @@ def _load_constants(config: dict) -> dict:
     )
 
 
-def _validate_candidate(
-    candidate: Dict[str, Any],
-    config: dict,
-    constants: dict,
-) -> Dict[str, Any]:
-    """
-    Run full physics validation on a single geometry candidate.
+# ---------------------------------------------------------------------------
+# Physics validation
+# ---------------------------------------------------------------------------
 
-    Args:
-        candidate:  Geometry dict (keys: r, l, e, width_r, ..., pin_diameter_C)
-                    plus optional surrogate predictions (pred_*, pass_prob, weighted_score).
-        config:     Parsed baseline.yaml.
-        constants:  Pre-extracted constants from _load_constants().
-
-    Returns:
-        Dict with:
-            valid_physics: bool
-            passed:        bool (all checks pass)
-            checks:        dict of individual check results
-            metrics:       raw engine output dict
-            design_eval:   full design dict (includes mass props, volume_envelope)
-    """
-    # --- Geometry keys used by the physics engine ---
-    GEO_KEYS = (
-        "r", "l", "e",
-        "width_r", "thickness_r",
-        "width_l", "thickness_l",
-        "d_shaft_A", "pin_diameter_B", "pin_diameter_C",
-    )
+def _validate_candidate(candidate: Dict[str, Any], config: dict, constants: dict) -> Dict[str, Any]:
+    GEO_KEYS = ("r", "l", "e", "width_r", "thickness_r",
+                "width_l", "thickness_l", "d_shaft_A", "pin_diameter_B", "pin_diameter_C")
     geo = {k: float(candidate[k]) for k in GEO_KEYS}
 
-    # --- Kinematic feasibility pre-check ---
     kin_margin = geo["l"] - (geo["r"] + geo["e"])
     if kin_margin <= 0:
-        return {
-            "valid_physics": False,
-            "kinematic_fail": True,
-            "kin_margin": kin_margin,
-            "passed": False,
-            "checks": {},
-            "metrics": {},
-            "design_eval": geo,
-        }
+        return {"valid_physics": False, "kinematic_fail": True,
+                "kin_margin": kin_margin, "passed": False, "checks": {}, "metrics": {}, "design_eval": geo}
 
-    # --- Build design_eval dict (mirrors generate.py logic) ---
     c = constants
     design_eval = dict(geo)
-    design_eval["omega"]   = c["omega"]
-    design_eval["m_block"] = c["m_block"]
-    design_eval["mu"]      = c["mu"]
-    design_eval["g"]       = c["g"]
+    design_eval.update({"omega": c["omega"], "m_block": c["m_block"], "mu": c["mu"], "g": c["g"]})
 
     mass_props = mp.compute_design_mass_properties(design_eval, config)
     design_eval.update(mass_props)
     design_eval["total_mass"] = (
-        design_eval.get("mass_crank",  0.0)
+        design_eval.get("mass_crank", 0.0)
         + design_eval.get("mass_rod",   0.0)
         + design_eval.get("mass_slider", 0.0)
     )
 
-    # Volume envelope (bounding box) — Section 3.4 of instructions.md
     _slider_cfg = config.get("geometry", {}).get("slider", {})
     _s_h = float(_slider_cfg.get("height", 0.02))
     _s_l = float(_slider_cfg.get("length", 0.02))
+    design_eval["slider_height"] = _s_h
     r, l, e = geo["r"], geo["l"], geo["e"]
     tr, tl  = geo["thickness_r"], geo["thickness_l"]
     _T = (tl + _s_h) / 2.0 + max(tr, (_s_h - tl) / 2.0)
@@ -230,23 +185,13 @@ def _validate_candidate(
     design_eval["sweep_step_deg"] = c["sweep_step_deg"]
     design_eval["total_cycles"]   = c["total_cycles"]
 
-    # --- Run physics engine ---
     metrics = engine.evaluate_design(design_eval)
-
     if not metrics.get("valid_physics", False):
-        return {
-            "valid_physics": False,
-            "kinematic_fail": False,
-            "passed": False,
-            "checks": {},
-            "metrics": metrics,
-            "design_eval": design_eval,
-        }
+        return {"valid_physics": False, "kinematic_fail": False, "passed": False,
+                "checks": {}, "metrics": metrics, "design_eval": design_eval}
 
-    # --- Evaluate pass/fail checks ---
     sigma_limit = c["sigma_limit"]
     tau_limit   = c["tau_limit"]
-
     checks: dict = {}
 
     s_max = metrics.get("sigma_max", 0.0)
@@ -255,27 +200,23 @@ def _validate_candidate(
         s_max / sigma_limit if sigma_limit > 0 else 0.0,
         t_max / tau_limit   if tau_limit   > 0 else 0.0,
     )
-    checks["utilization"]      = utilization
-    checks["check_static"]     = utilization <= c["utilization_max"]
+    checks["utilization"]  = utilization
+    checks["check_static"] = utilization <= c["utilization_max"]
 
-    for comp, key in (
-        ("rod",   "sigma_rod_peak"),
-        ("crank", "sigma_crank_peak"),
-        ("pin",   "sigma_pin_peak"),
-    ):
+    for comp, key in (("rod", "sigma_rod_peak"), ("crank", "sigma_crank_peak"), ("pin", "sigma_pin_peak")):
         peak = float(metrics.get(key, 0.0) or 0.0)
         n    = sigma_limit / peak if peak > 0.0 else float("inf")
-        checks[f"n_static_{comp}"]      = n
-        checks[f"check_static_{comp}"]  = n >= c["n_static_min"]
+        checks[f"n_static_{comp}"]     = n
+        checks[f"check_static_{comp}"] = n >= c["n_static_min"]
 
     n_buck = metrics.get("n_buck", float("inf"))
-    checks["n_buck"]       = n_buck
-    checks["check_buck"]   = (n_buck >= c["n_buck_min"]) if math.isfinite(n_buck) else True
+    checks["n_buck"]     = n_buck
+    checks["check_buck"] = (n_buck >= c["n_buck_min"]) if math.isfinite(n_buck) else True
 
     for comp in ("rod", "crank", "pin"):
         n = metrics.get(f"n_{comp}", float("inf"))
-        checks[f"n_fatigue_{comp}"]      = n
-        checks[f"check_fatigue_{comp}"]  = (n >= c["n_fatigue_min"]) if math.isfinite(n) else True
+        checks[f"n_fatigue_{comp}"]     = n
+        checks[f"check_fatigue_{comp}"] = (n >= c["n_fatigue_min"]) if math.isfinite(n) else True
 
     for comp in ("rod", "crank", "pin"):
         D = metrics.get(f"D_{comp}")
@@ -283,10 +224,8 @@ def _validate_candidate(
         checks[f"check_miner_{comp}"] = (D < c["d_miner_max"]) if D is not None else True
 
     n_shaft = metrics.get("n_shaft", float("inf"))
-    checks["n_shaft"]      = n_shaft
-    checks["check_shaft"]  = bool(
-        (n_shaft >= c["n_shaft_min"]) if math.isfinite(n_shaft) else True
-    )
+    checks["n_shaft"]     = n_shaft
+    checks["check_shaft"] = bool((n_shaft >= c["n_shaft_min"]) if math.isfinite(n_shaft) else True)
 
     all_checks = [
         checks["check_static"],
@@ -296,55 +235,252 @@ def _validate_candidate(
         checks["check_miner_rod"], checks["check_miner_crank"], checks["check_miner_pin"],
         checks["check_shaft"],
     ]
-
-    return {
-        "valid_physics": True,
-        "kinematic_fail": False,
-        "passed": all(all_checks),
-        "checks": checks,
-        "metrics": metrics,
-        "design_eval": design_eval,
-    }
+    return {"valid_physics": True, "kinematic_fail": False, "passed": all(all_checks),
+            "checks": checks, "metrics": metrics, "design_eval": design_eval}
 
 
 # ---------------------------------------------------------------------------
-# Net-section margin helper
+# Formatting helpers
 # ---------------------------------------------------------------------------
 
-def _net_section_margins(geo: dict, min_net: float) -> dict:
-    pairs = {
-        "width_r – pin_A": ("width_r",  "d_shaft_A"),
-        "width_r – pin_B": ("width_r",  "pin_diameter_B"),
-        "width_l – pin_B": ("width_l",  "pin_diameter_B"),
-        "width_l – pin_C": ("width_l",  "pin_diameter_C"),
-    }
-    return {
-        label: float(geo[w]) - float(geo[p]) - min_net
-        for label, (w, p) in pairs.items()
-    }
-
-
-# ---------------------------------------------------------------------------
-# Formatted printing
-# ---------------------------------------------------------------------------
-
-def _fmt(v: Optional[float], decimals: int = 4, unit: str = "") -> str:
-    if v is None:              return "     N/A"
-    if not math.isfinite(v):   return "     inf"
-    return f"{v:>8.{decimals}f}{unit}"
+def _fv(v: Optional[float], fmt: str = ".3f", unit: str = "") -> str:
+    """Format a float value; returns '—' if None or non-finite."""
+    if v is None or not math.isfinite(v):
+        return "—"
+    return f"{v:{fmt}}{unit}"
 
 
 def _ok(flag: bool) -> str:
     return "PASS" if flag else "FAIL"
 
 
-def _row(label: str, val: Optional[float], limit: Optional[float], ok: bool,
-         decimals: int = 4) -> str:
-    return (
-        f"  {label:<38} {_fmt(val, decimals):>10}   "
-        f"{_fmt(limit, decimals):>10}   {_ok(ok)}"
-    )
+def _bar(char: str = "─", width: int = W) -> str:
+    return "  " + char * (width - 2)
 
+
+# ---------------------------------------------------------------------------
+# Report sections
+# ---------------------------------------------------------------------------
+
+def _section_geometry(geo: dict, config: dict) -> None:
+    """Two-column geometry block + ROM/QRR confirmation."""
+    operating  = config.get("operating", {})
+    rom_target = float(operating.get("ROM",           0.25))  * 1e3
+    rom_tol    = float(operating.get("ROM_tolerance", 0.0005)) * 1e3
+    _qrr_cfg   = operating.get("QRR", {})
+    qrr_min_v  = float(_qrr_cfg.get("min", 1.5)) if isinstance(_qrr_cfg, dict) else 1.5
+    qrr_max_v  = float(_qrr_cfg.get("max", 2.5)) if isinstance(_qrr_cfg, dict) else 2.5
+
+    kin_m  = _kinematics.calculate_metrics(geo["r"], geo["l"], geo["e"])
+    valid  = kin_m.get("valid", False)
+    rom_mm = kin_m["ROM"] * 1e3 if valid else float("nan")
+    qrr    = kin_m["QRR"]       if valid else float("nan")
+    rom_ok = abs(rom_mm - rom_target) <= rom_tol if valid else False
+    qrr_ok = qrr_min_v <= qrr <= qrr_max_v      if valid else False
+
+    L = [
+        ("r  (crank)",   f"{geo['r']*1e3:>7.2f} mm"),
+        ("l  (rod)",     f"{geo['l']*1e3:>7.2f} mm"),
+        ("e  (offset)",  f"{geo['e']*1e3:>7.2f} mm"),
+        ("",             ""),
+        ("ROM (actual)",  f"{rom_mm:>7.2f} mm  [{'OK  ' if rom_ok else 'FAIL'}]" if valid else "INVALID"),
+        ("QRR (actual)",  f"{qrr:>7.3f}     [{'OK  ' if qrr_ok else 'FAIL'}]" if valid else "INVALID"),
+    ]
+    R = [
+        ("width_r",       f"{geo['width_r']*1e3:>7.2f} mm"),
+        ("thickness_r",   f"{geo['thickness_r']*1e3:>7.2f} mm"),
+        ("width_l",       f"{geo['width_l']*1e3:>7.2f} mm"),
+        ("thickness_l",   f"{geo['thickness_l']*1e3:>7.2f} mm"),
+        ("pin_A (shaft)", f"{geo['d_shaft_A']*1e3:>7.2f} mm"),
+        ("pin_B",         f"{geo['pin_diameter_B']*1e3:>7.2f} mm"),
+        ("pin_C",         f"{geo['pin_diameter_C']*1e3:>7.2f} mm"),
+    ]
+    nrows = max(len(L), len(R))
+    L += [("", "")] * (nrows - len(L))
+    R += [("", "")] * (nrows - len(R))
+
+    print(_bar())
+    print(f"  {'GEOMETRY'}")
+    print(_bar())
+    for (lk, lv), (rk, rv) in zip(L, R):
+        left  = f"  {lk:<16} {lv:<22}" if lk else " " * 40
+        right = f"  {rk:<16} {rv}" if rk else ""
+        print(f"{left}{right}")
+
+
+def _section_performance(
+    candidate:  Dict[str, Any],
+    result:     Dict[str, Any],
+    constants:  dict,
+    is_dataset: bool = False,
+) -> None:
+    """
+    Single table: Metric | Predicted | Actual | Limit | Status
+
+    Rows with a surrogate prediction show ML calibration quality.
+    Physics-only rows show '—' in Predicted.
+    For dataset best, 'Predicted' column shows CSV training values.
+    """
+    checks  = result["checks"]
+    metrics = result["metrics"]
+    design  = result["design_eval"]
+    c       = constants
+
+    # Helper to pull predicted value from candidate dict
+    def _pred(key: str) -> Optional[float]:
+        return candidate.get(f"pred_{key}")
+
+    # ── table header ──────────────────────────────────────────────────────
+    H_METRIC = "Metric"
+    H_PRED   = "CSV actual" if is_dataset else "Predicted"
+    H_ACTUAL = "Re-validated" if is_dataset else "Actual"
+    H_LIMIT  = "Limit"
+    H_STATUS = "Status"
+    COL = (28, 12, 12, 10, 6)  # column widths
+
+    def _row(metric, pred_s, actual_s, limit_s, status_s):
+        return (f"  {metric:<{COL[0]}} {pred_s:>{COL[1]}} {actual_s:>{COL[2]}} "
+                f"{limit_s:>{COL[3]}} {status_s:>{COL[4]}}")
+
+    sep_row = "  " + "─" * (sum(COL) + 4 * 1 + 2)
+    perf_title = ("PERFORMANCE  (CSV training values  vs  Physics re-validation)"
+                  if is_dataset else
+                  "PERFORMANCE  (Surrogate predicted  vs  Physics actual)")
+    print()
+    print(_bar())
+    print(f"  {perf_title}")
+    print(_bar())
+    print(_row(H_METRIC, H_PRED, H_ACTUAL, H_LIMIT, H_STATUS))
+    print(sep_row)
+
+    # ── Surrogate-predicted regression targets ─────────────────────────
+    # Mass and size (no limit, informational)
+    total_mass_act = design.get("total_mass", float("nan"))
+    vol_act        = design.get("volume_envelope", float("nan"))
+    tau_act        = metrics.get("tau_A_max", float("nan"))
+    E_act          = metrics.get("E_rev", float("nan"))
+
+    print(_row("total_mass",
+               _fv(_pred("total_mass") * 1e3 if _pred("total_mass") is not None else None, ".1f", " g"),
+               _fv(total_mass_act * 1e3,  ".1f", " g"),
+               "—", "—"))
+    print(_row("volume_envelope",
+               _fv(_pred("volume_envelope") * 1e6 if _pred("volume_envelope") else None, ".2f", " cm³"),
+               _fv(vol_act * 1e6, ".2f", " cm³"),
+               "—", "—"))
+    print(_row("tau_A_max",
+               _fv(_pred("tau_A_max"),  ".4f", " N·m"),
+               _fv(tau_act,            ".4f", " N·m"),
+               "—", "—"))
+    print(_row("E_rev",
+               _fv(_pred("E_rev"),  ".4f", " J"),
+               _fv(E_act,          ".4f", " J"),
+               "—", "—"))
+
+    print(sep_row)
+
+    # ── Safety factor rows (predicted + actual + limit + status) ──────────
+    def _fos_row(label, pred_val, actual_val, limit, ok, minimize=False, fmt=".2f",
+                 nonneg: bool = True):
+        """nonneg: show '—' (unreliable) if model predicted negative for a non-negative quantity."""
+        pv = None if (nonneg and pred_val is not None and pred_val < 0.0) else pred_val
+        pred_s   = _fv(pv,          fmt) if pv is not None else "—"
+        actual_s = _fv(actual_val,  fmt)
+        limit_s  = f"{'≤' if minimize else '≥'}{limit:{fmt}}"
+        return _row(label, pred_s, actual_s, limit_s, _ok(ok))
+
+    # utilization (surrogate predicts; physics actual)
+    util_pred = _pred("utilization")
+    util_act  = checks.get("utilization")
+    print(_fos_row("utilization",
+                   util_pred, util_act,
+                   c["utilization_max"], checks["check_static"],
+                   minimize=True, fmt=".3f"))
+
+    # n_buck (surrogate predicts)
+    print(_fos_row("n_buck",
+                   _pred("n_buck"), checks.get("n_buck"),
+                   c["n_buck_min"], checks["check_buck"]))
+
+    # n_shaft (surrogate predicts)
+    print(_fos_row("n_shaft",
+                   _pred("n_shaft"), checks.get("n_shaft"),
+                   c["n_shaft_min"], checks["check_shaft"]))
+
+    # min_n_static (surrogate predicts; physics gives per-link below)
+    min_n_static_act = min(
+        checks.get("n_static_rod",   float("inf")),
+        checks.get("n_static_crank", float("inf")),
+        checks.get("n_static_pin",   float("inf")),
+    )
+    print(_fos_row("min_n_static  (min of 3 links)",
+                   _pred("min_n_static"), min_n_static_act,
+                   c["n_static_min"], all([checks["check_static_rod"],
+                                          checks["check_static_crank"],
+                                          checks["check_static_pin"]])))
+
+    # min_n_fatigue (surrogate predicts; physics gives per-link below)
+    min_n_fat_act = min(
+        checks.get("n_fatigue_rod",   float("inf")),
+        checks.get("n_fatigue_crank", float("inf")),
+        checks.get("n_fatigue_pin",   float("inf")),
+    )
+    print(_fos_row("min_n_fatigue  (min of 3 links)",
+                   _pred("min_n_fatigue"), min_n_fat_act,
+                   c["n_fatigue_min"], all([checks["check_fatigue_rod"],
+                                           checks["check_fatigue_crank"],
+                                           checks["check_fatigue_pin"]])))
+
+    print(sep_row)
+
+    # ── Physics-only breakdown (no surrogate prediction) ─────────────────
+    print(_row("  — per-link detail (physics only) —", "", "", "", ""))
+
+    for comp in ("rod", "crank", "pin"):
+        print(_fos_row(f"  n_static  {comp}",
+                       None, checks.get(f"n_static_{comp}"),
+                       c["n_static_min"], checks[f"check_static_{comp}"]))
+
+    for comp in ("rod", "crank", "pin"):
+        print(_fos_row(f"  n_fatigue {comp}",
+                       None, checks.get(f"n_fatigue_{comp}"),
+                       c["n_fatigue_min"], checks[f"check_fatigue_{comp}"]))
+
+    for comp in ("rod", "crank", "pin"):
+        D   = checks.get(f"D_{comp}")
+        ok_ = checks.get(f"check_miner_{comp}", True)
+        print(_fos_row(f"  D_miner   {comp}",
+                       None, D, c["d_miner_max"], ok_,
+                       minimize=True, fmt=".4f"))
+
+    print(sep_row)
+
+
+def _section_net_sections(geo: dict, min_net: float) -> None:
+    pairs = [
+        ("width_r – pin_A", geo["width_r"], geo["d_shaft_A"]),
+        ("width_r – pin_B", geo["width_r"], geo["pin_diameter_B"]),
+        ("width_l – pin_B", geo["width_l"], geo["pin_diameter_B"]),
+        ("width_l – pin_C", geo["width_l"], geo["pin_diameter_C"]),
+    ]
+    print()
+    print(f"  NET-SECTION MARGINS  (need > 0  |  min_net = {min_net*1e3:.3f} mm)")
+    parts = []
+    for label, w, d in pairs:
+        margin = w - d - min_net
+        flag = "OK  " if margin > 0 else "FAIL"
+        parts.append(f"  {label}: {margin*1e3:+.2f} mm [{flag}]")
+    # print two per line
+    for i in range(0, len(parts), 2):
+        line = parts[i]
+        if i + 1 < len(parts):
+            line = f"{line:<42}{parts[i+1]}"
+        print(line)
+
+
+# ---------------------------------------------------------------------------
+# Per-candidate report
+# ---------------------------------------------------------------------------
 
 def _print_candidate_report(
     rank:      int,
@@ -352,165 +488,65 @@ def _print_candidate_report(
     result:    Dict[str, Any],
     constants: dict,
     config:    dict,
+    label:     Optional[str] = None,
 ) -> None:
-    checks     = result["checks"]
-    metrics    = result["metrics"]
-    design     = result["design_eval"]
-    c          = constants
-    geo        = {k: float(candidate[k])
-                  for k in ("r", "l", "e", "width_r", "thickness_r",
-                             "width_l", "thickness_l",
-                             "d_shaft_A", "pin_diameter_B", "pin_diameter_C")}
-
+    GEO_KEYS = ("r", "l", "e", "width_r", "thickness_r",
+                "width_l", "thickness_l", "d_shaft_A", "pin_diameter_B", "pin_diameter_C")
+    geo            = {k: float(candidate[k]) for k in GEO_KEYS}
     pass_prob      = candidate.get("pass_prob",      float("nan"))
     weighted_score = candidate.get("weighted_score", float("nan"))
+    verdict        = "PASS" if result.get("passed") else "FAIL"
+    is_dataset     = candidate.get("source") == "dataset"
+
+    if label is None:
+        label = "DATASET BEST  (actual train values)" if is_dataset else f"RANK {rank}"
+
+    score_label = "Objective score" if is_dataset else "Surrogate score"
 
     print()
-    print("=" * W)
-    print(f"  RANK {rank}  —  Surrogate score: {weighted_score:.4f}  "
-          f"|  pass_prob: {pass_prob:.1%}")
-    print("=" * W)
+    print("═" * W)
+    print(f"  {label}  │  {score_label}: {weighted_score:.4f}"
+          f"  │  pass_prob: {pass_prob:.1%}  │  Physics: {verdict}")
+    print("═" * W)
 
-    # --- Geometry ---
-    print()
-    print("  Mechanism dimensions")
-    print(f"    r (crank radius)     : {geo['r']*1e3:>7.2f} mm")
-    print(f"    l (rod length)       : {geo['l']*1e3:>7.2f} mm")
-    print(f"    e (eccentricity)     : {geo['e']*1e3:>7.2f} mm")
-    print(f"    ROM (l+r-e to l-r+e) : {(geo['l']+geo['r']-geo['e'])*1e3:>7.2f} "
-          f"→ {(geo['l']-geo['r']+geo['e'])*1e3:>7.2f} mm  "
-          f"[stroke ≈ {2*geo['r']*1e3:.2f} mm]")
-    print(f"    l – (r + e)          : {(geo['l'] - geo['r'] - geo['e'])*1e3:>+7.2f} mm  "
-          f"[kin. margin, must be > 0]")
+    # ── Geometry ──────────────────────────────────────────────────────────
+    _section_geometry(geo, config)
 
-    # --- ROM and QRR (analytical, same formula as Stage 1 and physics engine) ---
-    kin_m = _kinematics.calculate_metrics(geo['r'], geo['l'], geo['e'])
-    operating  = config.get('operating', {})
-    rom_target = float(operating.get('ROM', 0.25)) * 1e3          # mm
-    rom_tol    = float(operating.get('ROM_tolerance', 0.0005)) * 1e3  # mm
-    _qrr_cfg   = operating.get('QRR', {})
-    qrr_min_v  = float(_qrr_cfg.get('min', 1.5)) if isinstance(_qrr_cfg, dict) else 1.5
-    qrr_max_v  = float(_qrr_cfg.get('max', 2.5)) if isinstance(_qrr_cfg, dict) else 2.5
-    if kin_m.get('valid', False):
-        rom_mm  = kin_m['ROM'] * 1e3
-        qrr_val = kin_m['QRR']
-        rom_ok  = abs(rom_mm - rom_target) <= rom_tol
-        qrr_ok  = qrr_min_v <= qrr_val <= qrr_max_v
-        print(f"    ROM (actual)         : {rom_mm:>7.2f} mm  "
-              f"[target {rom_target:.0f}±{rom_tol:.1f} mm]  "
-              f"[{'OK  ' if rom_ok else 'FAIL'}]")
-        print(f"    QRR (actual)         : {qrr_val:>7.3f}     "
-              f"[target {qrr_min_v}–{qrr_max_v}]          "
-              f"[{'OK  ' if qrr_ok else 'FAIL'}]")
-    else:
-        print(f"    ROM / QRR            : KINEMATIC INVALID — cannot compute")
-    print()
-    print("  Cross-section & pins")
-    print(f"    width_r              : {geo['width_r']*1e3:>7.2f} mm  |  "
-          f"thickness_r : {geo['thickness_r']*1e3:>6.2f} mm")
-    print(f"    width_l              : {geo['width_l']*1e3:>7.2f} mm  |  "
-          f"thickness_l : {geo['thickness_l']*1e3:>6.2f} mm")
-    print(f"    pin_A (shaft)        : {geo['d_shaft_A']*1e3:>7.2f} mm")
-    print(f"    pin_B (crank–rod)    : {geo['pin_diameter_B']*1e3:>7.2f} mm")
-    print(f"    pin_C (rod–slider)   : {geo['pin_diameter_C']*1e3:>7.2f} mm")
-
-    # --- Surrogate predictions ---
-    print()
-    print("  Surrogate predictions")
-    pred_mass   = candidate.get("pred_total_mass",      float("nan"))
-    pred_vol    = candidate.get("pred_volume_envelope", float("nan"))
-    pred_tau    = candidate.get("pred_tau_A_max",       float("nan"))
-    pred_erev   = candidate.get("pred_E_rev",           float("nan"))
-    pred_nst    = candidate.get("pred_min_n_static",    float("nan"))
-    pred_util   = candidate.get("pred_utilization",     float("nan"))
-    pred_nbuck  = candidate.get("pred_n_buck",          float("nan"))
-    print(f"    total_mass           : {pred_mass*1e3:>7.1f} g" if math.isfinite(pred_mass) else "    total_mass           :     N/A")
-    print(f"    volume_envelope      : {pred_vol*1e6:>7.2f} cm³" if math.isfinite(pred_vol) else "    volume_envelope      :     N/A")
-    print(f"    tau_A_max            : {pred_tau:>7.4f} N·m" if math.isfinite(pred_tau) else "    tau_A_max            :     N/A")
-    print(f"    E_rev                : {pred_erev:>7.4f} J/rev" if math.isfinite(pred_erev) else "    E_rev                :     N/A")
-    print(f"    min_n_static (pred)  : {pred_nst:>7.2f}" if math.isfinite(pred_nst) else "    min_n_static (pred)  :     N/A")
-    print(f"    utilization (pred)   : {pred_util:>7.3f}" if math.isfinite(pred_util) else "    utilization (pred)   :     N/A")
-    print(f"    n_buck (pred)        : {pred_nbuck:>7.2f}" if math.isfinite(pred_nbuck) else "    n_buck (pred)        :     N/A")
-
-    # --- Physics engine results ---
-    print()
+    # ── Physics failed early ───────────────────────────────────────────────
     if not result["valid_physics"]:
-        if result.get("kinematic_fail"):
-            print(f"  KINEMATIC INFEASIBILITY — l < r+e by "
-                  f"{abs(result['kin_margin'])*1e3:.2f} mm")
-        else:
-            print("  PHYSICS ENGINE ERROR — numerical singularity or NaN")
         print()
-        print("=" * W)
-        print("  OVERALL VERDICT: FAIL")
-        print("=" * W)
+        if result.get("kinematic_fail"):
+            print(f"  ✗ KINEMATIC INFEASIBILITY  l–(r+e) = {result['kin_margin']*1e3:+.2f} mm  (must be > 0)")
+        else:
+            print("  ✗ PHYSICS ENGINE ERROR — numerical singularity or NaN in dynamics solver")
+        print()
+        print("═" * W)
+        print(f"  OVERALL VERDICT: FAIL")
+        print("═" * W)
         return
 
-    # Mass / energy
-    total_mass = design.get("total_mass", 0.0)
-    vol_env    = design.get("volume_envelope", float("nan"))
-    E_rev      = metrics.get("E_rev",    float("nan"))
-    tau_A      = metrics.get("tau_A_max", float("nan"))
+    # ── Performance table ─────────────────────────────────────────────────
+    _section_performance(candidate, result, constants, is_dataset=is_dataset)
 
-    print("  Physics engine — mass & energy")
-    print(f"    total_mass (actual)  : {total_mass*1e3:>7.2f} g")
-    print(f"    volume_envelope      : {vol_env*1e6:>7.2f} cm³" if math.isfinite(vol_env) else "    volume_envelope      :     N/A")
-    print(f"    tau_A_max            : {tau_A:>7.4f} N·m" if math.isfinite(tau_A) else "    tau_A_max            :     N/A")
-    print(f"    E_rev                : {E_rev*1e3:>7.3f} mJ/rev" if math.isfinite(E_rev) else "    E_rev                :     N/A")
+    # ── Net-section margins ───────────────────────────────────────────────
+    _section_net_sections(geo, constants["min_net"])
 
-    # Check table
+    # ── Verdict ───────────────────────────────────────────────────────────
     print()
-    print(f"  {'Physics check':<38} {'Value':>10}   {'Limit':>10}   Status")
-    print("  " + "─" * (W - 2))
-
-    util = checks.get("utilization", float("nan"))
-    print(_row("Static utilization (≤ limit)",
-               util, c["utilization_max"], checks["check_static"], decimals=3))
-    print(_row("n_static  rod   (≥ min)",
-               checks["n_static_rod"],   c["n_static_min"], checks["check_static_rod"]))
-    print(_row("n_static  crank (≥ min)",
-               checks["n_static_crank"], c["n_static_min"], checks["check_static_crank"]))
-    print(_row("n_static  pin   (≥ min)",
-               checks["n_static_pin"],   c["n_static_min"], checks["check_static_pin"]))
-    print(_row("n_buckling      (≥ min)",
-               checks["n_buck"], c["n_buck_min"], checks["check_buck"]))
-    print(_row("n_fatigue rod   (≥ min)",
-               checks["n_fatigue_rod"],  c["n_fatigue_min"], checks["check_fatigue_rod"]))
-    print(_row("n_fatigue crank (≥ min)",
-               checks["n_fatigue_crank"],c["n_fatigue_min"], checks["check_fatigue_crank"]))
-    print(_row("n_fatigue pin   (≥ min)",
-               checks["n_fatigue_pin"],  c["n_fatigue_min"], checks["check_fatigue_pin"]))
-    print(_row("D_miner   rod   (≤ max)",
-               checks["D_rod"],   c["d_miner_max"], checks["check_miner_rod"]))
-    print(_row("D_miner   crank (≤ max)",
-               checks["D_crank"], c["d_miner_max"], checks["check_miner_crank"]))
-    print(_row("D_miner   pin   (≤ max)",
-               checks["D_pin"],   c["d_miner_max"], checks["check_miner_pin"]))
-    print(_row("n_shaft  A      (≥ min)",
-               checks["n_shaft"], c["n_shaft_min"], checks["check_shaft"]))
-
-    # Net-section margins
-    margins = _net_section_margins(geo, c["min_net"])
-    print()
-    print(f"  Net-section margins  (need > 0;  min_net = {c['min_net']*1e3:.3f} mm)")
-    for label, margin in margins.items():
-        flag = "OK  " if margin > 0 else "FAIL"
-        print(f"    {label:<24}: {margin*1e3:>+8.3f} mm   [{flag}]")
-
-    # Verdict
-    verdict = "PASS" if result["passed"] else "FAIL"
-    print()
-    print("=" * W)
+    print("═" * W)
     print(f"  OVERALL VERDICT: {verdict}")
-    print("=" * W)
+    print("═" * W)
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Public entry point (importable by optimize_design.py)
 # ---------------------------------------------------------------------------
 
-def run(candidates_path: str, config_path: str, top_n: int) -> None:
-    # Load candidates JSON
+def run(candidates_path: str, config_path: str, top_n: int) -> int:
+    """
+    Validate and report top_n candidates.  Returns pass count.
+    Called by optimize_design.py or used standalone.
+    """
     p = Path(candidates_path)
     if not p.exists():
         logger.error("Candidates file not found: %s", p)
@@ -521,54 +557,69 @@ def run(candidates_path: str, config_path: str, top_n: int) -> None:
         all_candidates = json.load(fh)
 
     if not all_candidates:
-        print("\n  No candidates found in JSON.  Re-run the optimizer.", file=sys.stderr)
+        print("\n  No candidates in JSON. Re-run the optimizer.", file=sys.stderr)
         sys.exit(1)
 
-    candidates = all_candidates[:top_n]
+    # Separate surrogate candidates from dataset best
+    surrogate_candidates = [c for c in all_candidates if c.get("source") != "dataset"]
+    dataset_best         = next((c for c in all_candidates if c.get("source") == "dataset"), None)
 
-    # Load config and constants once
-    config    = load_config(config_path)
-    constants = _load_constants(config)
+    candidates = surrogate_candidates[:top_n]
+    config     = load_config(config_path)
+    constants  = _load_constants(config)
 
     print()
-    print("=" * W)
-    print(f"  MANUFACTURING REPORT — Top {len(candidates)} Optimizer Candidates")
-    print(f"  Specs: ROM≈250mm | QRR 1.5–2.5 | Al 2024-T3 | 500g | 30 RPM")
-    print("=" * W)
+    print("═" * W)
+    print(f"  PRE-MANUFACTURING REPORT  —  Top {len(candidates)} Optimizer Candidates")
+    print(f"  Specs: ROM≈250mm | QRR 1.5–2.5 | Al 2024-T3 | 500g load | 30 RPM")
+    print(f"  Material: S_y={constants['S_y']/1e6:.0f} MPa  "
+          f"| σ_limit={constants['sigma_limit']/1e6:.0f} MPa  "
+          f"| Cycles={int(constants['total_cycles']):,}")
+    print("═" * W)
 
     pass_count = 0
     for rank, candidate in enumerate(candidates, 1):
         result = _validate_candidate(candidate, config, constants)
         _print_candidate_report(rank, candidate, result, constants, config)
-        if result["passed"]:
+        if result.get("passed"):
             pass_count += 1
 
+    # ── Summary ───────────────────────────────────────────────────────────
     print()
-    print("=" * W)
-    print(f"  SUMMARY: {pass_count} / {len(candidates)} candidates passed full physics validation.")
+    print("═" * W)
+    print(f"  SUMMARY  {pass_count}/{len(candidates)} candidates passed full physics validation")
     if pass_count == 0:
-        print("  RECOMMENDATION: None of the top candidates are manufacture-ready.")
-        print("  Consider re-training the surrogate or regenerating data.")
-    elif pass_count >= 1:
-        print("  RECOMMENDATION: Rank 1 is the primary manufacture candidate.")
-        print("  Cross-check ROM and QRR with the kinematic preview before 3D printing.")
-    print("=" * W)
+        print("  ▶ No manufacture-ready candidate found.")
+        print("  ▶ Re-run optimizer or retrain surrogate with more data.")
+    else:
+        print("  ▶ Rank 1 is the primary manufacture candidate.")
+        if pass_count < len(candidates):
+            print(f"  ▶ Ranks {pass_count+1}–{len(candidates)} failed physics — do not manufacture.")
+    print("═" * W)
+
+    # ── Dataset best comparison ───────────────────────────────────────────
+    if dataset_best is not None:
+        print()
+        print("─" * W)
+        print(f"  DATASET BEST — highest-scoring design in training data (actual physics values)")
+        print(f"  Compare against Rank 1 to assess surrogate optimizer quality.")
+        print("─" * W)
+        db_result = _validate_candidate(dataset_best, config, constants)
+        _print_candidate_report(0, dataset_best, db_result, constants, config)
+
     print()
+
+    return pass_count
 
 
 def main() -> None:
     args = _build_parser().parse_args()
     try:
-        run(
-            candidates_path=args.candidates,
-            config_path=args.config,
-            top_n=args.top,
-        )
+        run(candidates_path=args.candidates, config_path=args.config, top_n=args.top)
     except FileNotFoundError as exc:
         logger.error("File not found: %s", exc)
         sys.exit(2)
     except KeyboardInterrupt:
-        logger.info("Interrupted.")
         sys.exit(130)
 
 

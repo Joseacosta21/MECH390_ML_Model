@@ -140,23 +140,22 @@ def run(config_path, seed, out_dir: Path) -> None:
 
     # ---- Summary -------------------------------------------------------------
     s = result.summary
-    print("\n" + "=" * 68)
-    print("  Dataset Generation — Summary")
-    print("=" * 68)
-    print(f"  Stage-1 valid 2D designs  : {s.get('n_stage1', '?'):>10,}")
-    print(f"  Stage-2 3D candidates     : {s.get('n_stage2', '?'):>10,}")
-    print(f"  Dropped (physics errors)  : {s.get('n_dropped', '?'):>10,}")
-    print(f"  Duplicates removed        : {s.get('n_duplicates_removed', 0):>10,}")
-    print(f"  Evaluated                 : {s.get('n_evaluated', '?'):>10,}")
-    print(f"  Passed                    : {s.get('n_passed', '?'):>10,}")
-    print(f"  Failed                    : {s.get('n_failed', '?'):>10,}")
-    print(f"  Pass rate                 : {s.get('pass_rate', 0.0):>10.1%}")
-    print(f"  Wall time                 : {elapsed:>10.2f} s")
-    print()
-    print("  Output files:")
+    logger.info("=" * 68)
+    logger.info("  Dataset Generation — Summary")
+    logger.info("=" * 68)
+    logger.info("  Stage-1 valid 2D designs  : %10s", f"{s.get('n_stage1', '?'):,}" if isinstance(s.get('n_stage1'), int) else "?")
+    logger.info("  Stage-2 3D candidates     : %10s", f"{s.get('n_stage2', '?'):,}" if isinstance(s.get('n_stage2'), int) else "?")
+    logger.info("  Dropped (physics errors)  : %10s", f"{s.get('n_dropped', '?'):,}" if isinstance(s.get('n_dropped'), int) else "?")
+    logger.info("  Duplicates removed        : %10,d", s.get('n_duplicates_removed', 0))
+    logger.info("  Evaluated                 : %10s", f"{s.get('n_evaluated', '?'):,}" if isinstance(s.get('n_evaluated'), int) else "?")
+    logger.info("  Passed                    : %10s", f"{s.get('n_passed', '?'):,}" if isinstance(s.get('n_passed'), int) else "?")
+    logger.info("  Failed                    : %10s", f"{s.get('n_failed', '?'):,}" if isinstance(s.get('n_failed'), int) else "?")
+    logger.info("  Pass rate                 : %10.1f%%", s.get('pass_rate', 0.0) * 100)
+    logger.info("  Wall time                 : %10.2f s", elapsed)
+    logger.info("  Output files:")
     for filename, nrows, path in written:
-        print(f"    {filename:<25}  {nrows:>6,} rows  →  {path}")
-    print("=" * 68)
+        logger.info("    %-25s  %6,d rows  →  %s", filename, nrows, path)
+    logger.info("=" * 68)
 
     if s.get('n_evaluated', 0) == 0:
         logger.error("No designs were evaluated. Check config bounds and physics setup.")
