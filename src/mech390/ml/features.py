@@ -5,17 +5,20 @@ Responsibilities
 ----------------
 - Load and merge passed/failed CSVs into a single labeled DataFrame
 - Derive the `min_n_static` column (min of the three per-link static FOS values)
+- Derive slenderness features (slenderness_r, slenderness_l)
 - Split into input features X and targets y
 - Fit a StandardScaler on the training split; transform all splits
 - Provide helpers to persist and reload the scaler alongside the model checkpoint
 
 Column contracts
 ----------------
-INPUT_FEATURES (10)  : the 10 independent design variables (d_shaft_A replaces pin_diameter_A)
-REGRESSION_TARGETS   : continuous outputs predicted by regression heads (8 targets incl. n_shaft)
+RAW_GEO_KEYS (10)    : the 10 independent design variables the optimizer searches over
+INPUT_FEATURES (12)  : RAW_GEO_KEYS + 2 derived slenderness features fed to the NN
+REGRESSION_TARGETS   : continuous outputs predicted by regression heads (8 targets)
 CLASSIFICATION_TARGET: binary pass/fail label
 """
 
+import logging
 import pickle
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -25,16 +28,26 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Column contracts
 # ---------------------------------------------------------------------------
 
-INPUT_FEATURES: List[str] = [
+# Raw geometry variables — the 10 independent design parameters.
+# This is the search space the optimizer uses; bounds come from baseline.yaml.
+RAW_GEO_KEYS: List[str] = [
     'r', 'l', 'e',
     'width_r', 'thickness_r',
     'width_l', 'thickness_l',
     'd_shaft_A', 'pin_diameter_B', 'pin_diameter_C',
 ]
+
+# Model input features — raw geometry + 2 derived slenderness ratios.
+# slenderness_r = r / thickness_r  (crank slenderness)
+# slenderness_l = l / thickness_l  (rod slenderness)
+# Computed by derive_input_features(); never appear in the raw CSVs.
+INPUT_FEATURES: List[str] = RAW_GEO_KEYS + ['slenderness_r', 'slenderness_l']
 
 CLASSIFICATION_TARGET: str = 'pass_fail'
 
@@ -47,9 +60,54 @@ REGRESSION_TARGETS: List[str] = [
     'utilization',
     'n_buck',
     'n_shaft',        # Mott 12-24 ASME-Elliptic shaft safety factor
+    'min_n_fatigue',  # derived: min(n_rod, n_crank, n_pin) — Goodman fatigue FoS
 ]
 
 ALL_TARGETS: List[str] = [CLASSIFICATION_TARGET] + REGRESSION_TARGETS
+
+
+# ---------------------------------------------------------------------------
+# Derived feature helpers
+# ---------------------------------------------------------------------------
+
+def derive_input_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add derived input features to a DataFrame in-place (returns copy).
+
+    Computes:
+        slenderness_r = r / thickness_r
+        slenderness_l = l / thickness_l
+
+    Call this after loading raw CSV data and before calling get_arrays() or
+    scaler.transform().  SurrogatePredictor.predict() calls this automatically.
+    """
+    df = df.copy()
+    df['slenderness_r'] = df['r'] / df['thickness_r']
+    df['slenderness_l'] = df['l'] / df['thickness_l']
+    return df
+
+
+def raw_to_model_input(x: np.ndarray) -> np.ndarray:
+    """
+    Convert a 10-dim raw geometry vector (RAW_GEO_KEYS order) to a 12-dim
+    model input vector (INPUT_FEATURES order) by appending slenderness ratios.
+
+    Used by the optimizer score function, which searches in the 10-dim raw
+    geometry space but must feed 12-dim vectors to the surrogate.
+
+    Args:
+        x: 1-D numpy array of length 10 in RAW_GEO_KEYS order.
+
+    Returns:
+        1-D numpy array of length 12 (float32) in INPUT_FEATURES order.
+    """
+    r_idx   = RAW_GEO_KEYS.index('r')
+    tr_idx  = RAW_GEO_KEYS.index('thickness_r')
+    l_idx   = RAW_GEO_KEYS.index('l')
+    tl_idx  = RAW_GEO_KEYS.index('thickness_l')
+    slend_r = float(x[r_idx])  / float(x[tr_idx])
+    slend_l = float(x[l_idx])  / float(x[tl_idx])
+    return np.append(x.astype(np.float32), [slend_r, slend_l])
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +119,8 @@ def load_dataset(csv_pass: str, csv_fail: str) -> pd.DataFrame:
     Load and merge the passed and failed design CSVs.
 
     Adds the derived column `min_n_static` = min of the three per-link
-    static FOS values.  Rows missing any input feature or target are dropped.
+    static FOS values.  Also adds slenderness_r and slenderness_l derived
+    features.  Rows missing any input feature or target are dropped.
 
     Args:
         csv_pass: Path to passed_configs.csv
@@ -89,16 +148,26 @@ def load_dataset(csv_pass: str, csv_fail: str) -> pd.DataFrame:
             "Re-run the data generation pipeline to produce these columns."
         )
 
+    # Derive min_n_fatigue — minimum Goodman fatigue FoS across all three links
+    fatigue_cols = ['n_rod', 'n_crank', 'n_pin']
+    if all(c in df.columns for c in fatigue_cols):
+        df['min_n_fatigue'] = df[fatigue_cols].min(axis=1)
+    else:
+        raise KeyError(
+            f"Missing fatigue FOS columns. Expected: {fatigue_cols}. "
+            "Re-run the data generation pipeline to produce these columns."
+        )
+
+    # Derive slenderness features
+    df = derive_input_features(df)
+
     # Drop rows missing any required column
     required = INPUT_FEATURES + ALL_TARGETS
     before = len(df)
     df = df.dropna(subset=required)
     dropped = before - len(df)
     if dropped > 0:
-        import logging
-        logging.getLogger(__name__).warning(
-            "Dropped %d rows with NaN in required columns.", dropped
-        )
+        logger.warning("Dropped %d rows with NaN in required columns.", dropped)
 
     return df.reset_index(drop=True)
 
@@ -115,6 +184,9 @@ def split_dataset(
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Stratified train / val / test split on `pass_fail`.
+
+    Logs a warning if any regression target mean differs between train and val
+    by more than 20% (relative), indicating a skewed split.
 
     Returns:
         (train_df, val_df, test_df)
@@ -137,7 +209,27 @@ def split_dataset(
         stratify=train_val[CLASSIFICATION_TARGET],
         random_state=random_seed,
     )
-    return train.reset_index(drop=True), val.reset_index(drop=True), test.reset_index(drop=True)
+    train = train.reset_index(drop=True)
+    val   = val.reset_index(drop=True)
+    test  = test.reset_index(drop=True)
+
+    # 8.2 — warn if regression target distributions are severely skewed across splits
+    for col in REGRESSION_TARGETS:
+        if col not in train.columns:
+            continue
+        train_mean = float(train[col].mean())
+        val_mean   = float(val[col].mean())
+        if abs(train_mean) > 1e-8:
+            rel_diff = abs(train_mean - val_mean) / abs(train_mean)
+            if rel_diff > 0.20:
+                logger.warning(
+                    "split_dataset: '%s' distribution differs between train "
+                    "(mean=%.4g) and val (mean=%.4g) by %.1f%% — consider "
+                    "re-seeding or increasing dataset size.",
+                    col, train_mean, val_mean, rel_diff * 100,
+                )
+
+    return train, val, test
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +250,7 @@ def get_arrays(
     """
     Return (X, y_clf, y_reg) numpy arrays for one split.
 
-    X       : (N, 10)  float32 — normalised input features
+    X       : (N, 12)  float32 — normalised input features (incl. slenderness)
     y_clf   : (N, 1)   float32 — pass_fail label
     y_reg   : (N, 8)   float32 — regression targets in REGRESSION_TARGETS order
     """
@@ -174,17 +266,29 @@ def get_arrays(
 
 def compute_target_stats(train_df: pd.DataFrame) -> Dict[str, Dict[str, float]]:
     """
-    Compute min/max of each regression target from the training set.
-    Used by the optimizer to normalise objective values to [0, 1].
+    Compute min/max of each regression target from PASSING rows of the training set.
+
+    Restricted to pass_fail == 1 to exclude pathological failing designs
+    (near-zero cross-sections, extreme stresses) that inflate the ranges and
+    make objective normalisation useless in the optimizer score function.
+    Example: tau_A_max on all rows spans [0.17, 70,541 N·m]; on passing rows
+    only it spans [0.17, ~5 N·m], giving the optimizer meaningful gradient.
 
     Returns:
         {target_name: {'min': float, 'max': float}}
     """
+    pass_df = train_df[train_df[CLASSIFICATION_TARGET] == 1]
+    if len(pass_df) == 0:
+        raise ValueError("compute_target_stats: no passing rows in training set.")
+    logger.info(
+        "compute_target_stats: using %d passing rows (of %d total) for normalisation ranges.",
+        len(pass_df), len(train_df),
+    )
     stats = {}
     for col in REGRESSION_TARGETS:
         stats[col] = {
-            'min': float(train_df[col].min()),
-            'max': float(train_df[col].max()),
+            'min': float(pass_df[col].min()),
+            'max': float(pass_df[col].max()),
         }
     return stats
 
@@ -193,12 +297,22 @@ def compute_target_stats(train_df: pd.DataFrame) -> Dict[str, Dict[str, float]]:
 # Target normalisation helpers (train on [0,1]; infer in physical units)
 # ---------------------------------------------------------------------------
 
-def normalize_targets(y_reg: np.ndarray, target_stats: Dict[str, Dict[str, float]]) -> np.ndarray:
+def normalize_targets(
+    y_reg: np.ndarray,
+    target_stats: Dict[str, Dict[str, float]],
+    warn: bool = False,
+) -> np.ndarray:
     """
     Normalise regression targets to [0, 1] using training min/max.
 
     Needed so MSE loss is not dominated by targets with large physical scales
     (e.g. volume_envelope in m³ vs utilization in [0,1]).
+
+    8.1 — When warn=True, logs a warning per column when values fall outside
+    the training range [min, max], indicating distribution mismatch.
+    Pass warn=True only for val/test sets — on the training set, fail rows
+    below the pass-only normalisation range are expected by design and the
+    warnings are not actionable.
     """
     y_norm = y_reg.copy().astype(np.float32)
     for i, col in enumerate(REGRESSION_TARGETS):
@@ -206,6 +320,16 @@ def normalize_targets(y_reg: np.ndarray, target_stats: Dict[str, Dict[str, float
         mx  = float(target_stats[col]['max'])
         rng = mx - mn
         if rng > 0:
+            if warn:
+                n_below = int((y_reg[:, i] < mn).sum())
+                n_above = int((y_reg[:, i] > mx).sum())
+                if n_below + n_above > 0:
+                    logger.warning(
+                        "normalize_targets: '%s' has %d row(s) outside training "
+                        "range [%.4g, %.4g] (%d below, %d above). "
+                        "Train/val distributions may not fully overlap.",
+                        col, n_below + n_above, mn, mx, n_below, n_above,
+                    )
             y_norm[:, i] = (y_reg[:, i] - mn) / rng
         else:
             y_norm[:, i] = 0.0

@@ -19,28 +19,34 @@
 # ---------------------------------------------------------------------------
 
 objectives:
-  total_mass:
-    weight:    0.30
-    direction: minimize       # lighter mechanism → cheaper to 3D print
+  min_n_fatigue:
+    weight:    0.40
+    direction: maximize       # highest-weight: fatigue FoS is the binding constraint
+                              # at 18.72M cycles; surrogate now predicts min(n_rod, n_crank, n_pin)
 
   volume_envelope:
-    weight:    0.25
+    weight:    0.20
     direction: minimize       # smaller footprint → easier to fit/mount
 
   tau_A_max:
-    weight:    0.15
+    weight:    0.20
     direction: minimize       # lower peak torque → smaller / cheaper motor
 
   E_rev:
-    weight:    0.15
+    weight:    0.10
     direction: minimize       # lower energy per revolution → more efficient motor selection
 
-  min_n_static:
-    weight:    0.15
-    direction: maximize       # higher static safety margin → more robust
+  total_mass:
+    weight:    0.10
+    direction: minimize       # lighter mechanism → cheaper to 3D print
+
+  # min_n_static removed (ML-P3): all passing designs already satisfy the static
+  # FOS floor enforced by generate.py; maximising it further does not improve
+  # structural safety and can steer the optimizer toward fatigue-failing designs
+  # that happen to have paradoxically high static FOS (different failure mode).
 
 constraints:
-  pass_fail_prob_min: 0.90    # reject geometries with predicted pass probability < 90%
+  pass_fail_prob_min: 0.95    # reject geometries with predicted pass probability < 95%
 
   # Penalty scaling factors for each hard constraint violation.
   # These multiply the raw violation magnitude before subtracting from score.

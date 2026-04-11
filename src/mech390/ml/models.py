@@ -18,10 +18,17 @@ The hidden layer widths, depth, dropout rate, and batch-norm flag are all
 configurable so that Optuna can search over them.
 """
 
+import logging
 from typing import List
 
 import torch
 import torch.nn as nn
+
+logger = logging.getLogger(__name__)
+
+# Increment when the checkpoint dict schema changes (new/renamed keys).
+# save_checkpoint() writes this; validate_checkpoint_version() checks it.
+CHECKPOINT_VERSION: int = 1
 
 
 class CrankSliderSurrogate(nn.Module):
@@ -96,6 +103,7 @@ def save_checkpoint(
     path:         str,
 ) -> None:
     torch.save({
+        'version':              CHECKPOINT_VERSION,
         'model_state_dict':     model.state_dict(),
         'optimizer_state_dict': optimizer_state,
         'epoch':                epoch,
@@ -106,6 +114,26 @@ def save_checkpoint(
 
 def load_checkpoint(path: str, device: str = 'cpu') -> dict:
     return torch.load(path, map_location=device, weights_only=False)
+
+
+def validate_checkpoint_version(ckpt: dict) -> None:
+    """
+    Check the checkpoint schema version against CHECKPOINT_VERSION.
+
+    - Missing 'version' key: warns (old checkpoint pre-versioning) and continues.
+    - Version mismatch: raises ValueError — re-train required.
+    """
+    ver = ckpt.get('version')
+    if ver is None:
+        logger.warning(
+            "Checkpoint has no 'version' key (pre-versioning checkpoint). "
+            "Proceeding — re-train to get a versioned checkpoint."
+        )
+    elif ver != CHECKPOINT_VERSION:
+        raise ValueError(
+            f"Checkpoint version {ver} does not match expected "
+            f"{CHECKPOINT_VERSION}. Re-train the model."
+        )
 
 
 def build_model_from_hparams(hparams: dict) -> CrankSliderSurrogate:

@@ -128,7 +128,7 @@ def run(config_path: str) -> None:
     tau_limit   = 0.577 * sigma_limit
 
     delta      = float(get_or_warn(sa_cfg, 'diametral_clearance_m', 1e-4, context=_ctx))
-    min_wall   = float(get_or_warn(sa_cfg, 'min_wall_mm', 0.5e-3, context=_ctx))
+    min_wall   = float(get_or_warn(sa_cfg, 'min_wall_m', 0.5e-3, context=_ctx))
     min_net    = delta + 2.0 * min_wall
 
     _mat = {
@@ -176,7 +176,8 @@ def run(config_path: str) -> None:
 
     # Volume envelope (bounding box)
     _slider_cfg = config.get('geometry', {}).get('slider', {})
-    _s_h = float(_slider_cfg.get('height', 0.02))
+    _s_h = float(_slider_cfg.get('height', 0.02))   # slider height (y) — vertical extent
+    _s_w = float(_slider_cfg.get('width',  0.02))   # slider width (z)  — OOP thickness for Pin C bearing
     _s_l = float(_slider_cfg.get('length', 0.02))
     _r, _l, _e = CANDIDATE['r'], CANDIDATE['l'], CANDIDATE['e']
     _tr = CANDIDATE['thickness_r']
@@ -186,7 +187,7 @@ def run(config_path: str) -> None:
     _H = _r + max(_r, _e + _s_h / 2.0)
     _L = _r + float(np.sqrt(max((_r + _l)**2 - _e**2, 0.0))) + _s_l / 2.0
     design_eval['volume_envelope'] = _T * _H * _L
-    design_eval['slider_height']  = _s_h   # slider OOP thickness (z) — needed by _pin_stresses bearing at C
+    design_eval['slider_height']  = _s_w   # slider OOP thickness (z, width in YAML) — needed by _pin_stresses bearing at C
 
     design_eval.update(_mat)
     design_eval.update(_sa)
