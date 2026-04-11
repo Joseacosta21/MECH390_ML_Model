@@ -200,13 +200,21 @@ def _build_summary(
 # Public interface
 # ---------------------------------------------------------------------------
 
-def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> DatasetResult:
+def generate_dataset(
+    config: Dict[str, Any], 
+    seed: Optional[int] = None,
+    out_dir: Optional[Any] = None,
+    chunk_size: int = 10000
+) -> DatasetResult:
     """
     Run the full pipeline and return a DatasetResult with all seven DataFrames.
+    If out_dir is provided, writes CSV chunks on the fly to prevent RAM exhaustion.
 
     Args:
-        config: Configuration dictionary (loaded from YAML via load_config).
-        seed:   Random seed (overrides config.random_seed if provided).
+        config:     Configuration dictionary (loaded from YAML via load_config).
+        seed:       Random seed (overrides config.random_seed if provided).
+        out_dir:    Path to output directory. If set, streams to CSV.
+        chunk_size: Number of evaluated designs to accumulate before writing to disk.
 
     Returns:
         DatasetResult
@@ -317,6 +325,49 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
     design_id = 0
     n_stage2  = 0
     n_dropped = 0
+    n_duplicates = 0
+    seen_geoms = set()
+
+    total_passed = 0
+    total_failed = 0
+    files_written = set()
+
+    def _to_df(rows: List[Dict]) -> pd.DataFrame:
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+    def _write_chunk(dest_dir):
+        nonlocal total_passed, total_failed
+        from pathlib import Path
+        dest = Path(dest_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+
+        def _write_df(rows, filename):
+            if not rows:
+                return
+            df = _to_df(rows)
+            mode = 'a' if filename in files_written else 'w'
+            header = filename not in files_written
+            df.to_csv(dest / filename, mode=mode, header=header, index=False)
+            files_written.add(filename)
+
+        _write_df(kin_rows,  "kinematics.csv")
+        _write_df(dyn_rows,  "dynamics.csv")
+        _write_df(str_rows,  "stresses.csv")
+        _write_df(fat_rows,  "fatigue.csv")
+        _write_df(buck_rows, "buckling.csv")
+        _write_df(pass_rows, "passed_configs.csv")
+        _write_df(fail_rows, "failed_configs.csv")
+            
+        total_passed += len(pass_rows)
+        total_failed += len(fail_rows)
+        
+        kin_rows.clear()
+        dyn_rows.clear()
+        str_rows.clear()
+        fat_rows.clear()
+        buck_rows.clear()
+        pass_rows.clear()
+        fail_rows.clear()
 
     for design in stage2_embodiment.iter_expand_to_3d(valid_2d, config):
         n_stage2 += 1
@@ -336,6 +387,14 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
                 logger.warning("Mass props failed for stage2 design #%d: %s", n_stage2, exc)
                 n_dropped += 1
                 continue
+
+        # --- On the fly deduplication ---
+        geom = _extract_geom(design_eval)
+        geom_tuple = tuple(geom.get(c, 0.0) for c in _GEOM_COLS)
+        if geom_tuple in seen_geoms:
+            n_duplicates += 1
+            continue
+        seen_geoms.add(geom_tuple)
 
         # --- Derived design metrics (geometry + mass, computed once) ---
         design_eval['total_mass'] = (
@@ -456,42 +515,57 @@ def generate_dataset(config: Dict[str, Any], seed: Optional[int] = None) -> Data
         else:
             fail_rows.append(config_row)
 
+        if out_dir is not None and (len(pass_rows) + len(fail_rows)) >= chunk_size:
+            _write_chunk(out_dir)
+
+    # Write remaining items if out_dir is provided
+    if out_dir is not None and (pass_rows or fail_rows):
+        _write_chunk(out_dir)
+
     logger.info(
         "Pipeline complete — %d evaluated, %d passed, %d failed, %d dropped.",
-        design_id, len(pass_rows), len(fail_rows), n_dropped,
+        design_id, total_passed if out_dir else len(pass_rows),
+        total_failed if out_dir else len(fail_rows), n_dropped,
     )
 
     # -------------------------------------------------------------------------
-    # Build DataFrames
+    # Build DataFrames (if not chunked to disk)
     # -------------------------------------------------------------------------
-    def _to_df(rows: List[Dict]) -> pd.DataFrame:
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    if out_dir is None:
+        kinematics_df = _to_df(kin_rows)
+        dynamics_df   = _to_df(dyn_rows)
+        stresses_df   = _to_df(str_rows)
+        fatigue_df    = _to_df(fat_rows)
+        buckling_df   = _to_df(buck_rows)
+        passed_df     = _to_df(pass_rows)
+        failed_df     = _to_df(fail_rows)
+    else:
+        empty = pd.DataFrame()
+        kinematics_df = dynamics_df = stresses_df = fatigue_df = buckling_df = passed_df = failed_df = empty
 
-    kinematics_df = _to_df(kin_rows)
-    dynamics_df   = _to_df(dyn_rows)
-    stresses_df   = _to_df(str_rows)
-    fatigue_df    = _to_df(fat_rows)
-    buckling_df   = _to_df(buck_rows)
-    passed_df     = _to_df(pass_rows)
-    failed_df     = _to_df(fail_rows)
-
-    # -------------------------------------------------------------------------
-    # Deduplicate — drop designs with identical rounded geometry (post-rounding
-    # collision: two raw samples that round to the same dimensions)
-    # -------------------------------------------------------------------------
-    (
-        kinematics_df, dynamics_df, stresses_df,
-        fatigue_df, buckling_df, passed_df, failed_df,
-    ), n_duplicates = _drop_duplicate_designs(
-        [kinematics_df, dynamics_df, stresses_df,
-         fatigue_df, buckling_df, passed_df, failed_df],
-        fatigue_df,
-    )
+    # On-the-fly deduplication was already applied.
     if n_duplicates > 0:
         logger.info("Removed %d duplicate geometry design(s) (post-rounding collision).", n_duplicates)
 
-    summary = _build_summary(n_stage1, n_stage2, n_dropped, passed_df, failed_df, start_time)
-    summary['n_duplicates_removed'] = n_duplicates
+    # Note: Using out_dir implies passed_df and failed_df are empty internally. 
+    # To build the correct summary if out_dir is used, use total counts.
+    # We pass mock DFs of the correct length to _build_summary, or we just pass the count?
+    # Actually, _build_summary uses `len(passed_df)`, so let's adjust it!
+    n_pass = total_passed if out_dir else len(passed_df)
+    n_fail = total_failed if out_dir else len(failed_df)
+    n_eval = n_pass + n_fail
+    
+    summary = {
+        'n_stage1':        n_stage1,
+        'n_stage2':        n_stage2,
+        'n_dropped':       n_dropped,
+        'n_evaluated':     n_eval,
+        'n_passed':        n_pass,
+        'n_failed':        n_fail,
+        'pass_rate':       n_pass / n_eval if n_eval > 0 else 0.0,
+        'time_taken_sec':  time.time() - start_time,
+        'n_duplicates_removed': n_duplicates
+    }
 
     return DatasetResult(
         kinematics_df, dynamics_df, stresses_df,
