@@ -334,11 +334,6 @@ No open bugs.
 
 ### Repository / Documentation
 
-- [x] **Add .pngs to .gitignore** — `reports/**/*.png` and `assets/*.png` are committed binary blobs; exclude to keep repo lean
-- [x] **Add .md files to .gitignore (except README)** — `CLAUDE.md`, `instructions.md`, `MECH_390_project_description_Winter_2026.md`, and all `.original.md` files should not be tracked (keep `README.md` only)
-- [x] **Remove Claude mentions from README.md** — strip all references to Claude / agent setup from `README.md`; keep them in `README.original.md` unchanged
-- [ ] **Appendix: input/output test dataset** — professor requires the model's test-set inputs and predictions in the final report appendix; export `data/splits/test.csv` + corresponding model predictions to a clean table (feature columns + all regression targets + `pass_fail` prediction vs ground truth)
-
 ### Code hygiene
 
 - [ ] **Type annotations (9.2)** — add type hints to physics modules (dynamics.py, stresses.py, fatigue.py, buckling.py); configure mypy or pyright in pyproject.toml
