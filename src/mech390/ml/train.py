@@ -53,11 +53,13 @@ def _make_loader(X, y_clf, y_reg, batch_size: int, shuffle: bool) -> DataLoader:
 # Single training run
 # ---------------------------------------------------------------------------
 
+global_history = []
 def _train_one_trial(
     hparams:     Dict[str, Any],
     loaders:     Dict[str, DataLoader],
     cfg:         Dict[str, Any],
     device:      torch.device,
+trial_id: int=0,
 ) -> float:
     """
     Train a single model with given hparams; return best val_f1.
@@ -83,6 +85,7 @@ def _train_one_trial(
 
     max_epochs = int(cfg['training']['max_epochs'])
     patience   = int(cfg['training']['patience'])
+    trial_history = []
 
     # ML-P7 — optional CosineAnnealingLR (configurable via surrogate.yaml)
     sched_cfg = cfg.get('lr_schedule', {})
@@ -99,6 +102,8 @@ def _train_one_trial(
     no_improve    = 0
 
     for epoch in range(max_epochs):
+        train_loss_epoch = 0.0
+        batches = 0
         # --- Train ---
         model.train()
         for X_b, y_clf_b, y_reg_b in loaders['train']:
@@ -117,7 +122,10 @@ def _train_one_trial(
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            train_loss_epoch += loss.item()
+            batches += 1
 
+        train_loss_epoch /= max(1, batches)
         # --- Validate ---
         model.eval()
         val_loss = 0.0
@@ -154,6 +162,13 @@ def _train_one_trial(
         if scheduler is not None:
             scheduler.step()
 
+        trial_history.append({
+            'epoch': epoch,
+            'train_loss': train_loss_epoch,
+            'val_loss': val_loss,
+            'val_f1': val_f1
+        })
+
         # Early stopping on val_f1 (the Optuna objective), not val_loss.
         # Saving on val_loss can discard the best-classified epoch when
         # regression MSE continues to fall after F1 has already peaked.
@@ -169,6 +184,12 @@ def _train_one_trial(
     # Restore best weights into model (for checkpoint saving by caller)
     if best_state is not None:
         model.load_state_dict(best_state)
+
+    global_history.append({
+        'trial_id': trial_id,
+        'history': trial_history,
+        'best_val_f1': best_val_f1
+    })
 
     return best_val_f1, model
 
@@ -207,7 +228,7 @@ def _make_objective(loaders, cfg, device, best_tracker):
             'val': loaders['val'],
         }
 
-        val_f1, model = _train_one_trial(hparams, trial_loaders, cfg, device)
+        val_f1, model = _train_one_trial(hparams, trial_loaders, cfg, device, trial_id=trial.number)
 
         # Track the globally best model
         if val_f1 > best_tracker['val_f1']:
@@ -247,6 +268,15 @@ def run_training(cfg: Dict[str, Any]) -> None:
         random_seed = data_cfg['random_seed'],
     )
     logger.info("Split: train=%d  val=%d  test=%d", len(train_df), len(val_df), len(test_df))
+
+    # Persist split DataFrames before any training begins so the exact rows
+    # used for training are reproducible and available for the appendix.
+    splits_dir = Path("data/splits")
+    splits_dir.mkdir(parents=True, exist_ok=True)
+    train_df.to_csv(splits_dir / "train.csv", index=False)
+    val_df.to_csv(splits_dir / "validate.csv", index=False)
+    test_df.to_csv(splits_dir / "test.csv", index=False)
+    logger.info("Split CSVs written to %s", splits_dir.resolve())
 
     scaler       = F.fit_scaler(train_df)
     target_stats = F.compute_target_stats(train_df)
@@ -335,3 +365,18 @@ def run_training(cfg: Dict[str, Any]) -> None:
             r2 = 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else float('nan')
             logger.info("Val R\u00b2  %-22s  %.4f", name, r2)
             print(f"  {name:<22}  {r2:.4f}")
+
+    history_path = str(model_dir / 'optuna_history.json')
+    val_preds_path = str(model_dir / 'validation_preds.npz')
+
+    logger.info("Saving optuna training history to %s", history_path)
+    with open(history_path, 'w') as f:
+        json.dump(global_history, f)
+
+    logger.info("Saving validation predictions to %s", val_preds_path)
+    if all_preds_reg:
+        np.savez(
+            val_preds_path,
+            preds_reg=y_pred_all,
+            labels_reg=y_true_all
+        )

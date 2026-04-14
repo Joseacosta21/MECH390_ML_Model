@@ -30,6 +30,9 @@ Report structure (per candidate)
 
 import argparse
 import json
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 import logging
 import math
 import sys
@@ -452,6 +455,15 @@ def _section_performance(
         print(_fos_row(f"  D_miner   {comp}",
                        None, D, c["d_miner_max"], ok_,
                        minimize=True, fmt=".4f"))
+        
+        t_f = metrics.get(f"t_f_{comp}")
+        if t_f is None or not math.isfinite(t_f) or t_f > 3.1536e13:
+            life_str = "Infinite"
+        else:
+            years = t_f / (3600.0 * 24.0 * 365.25)
+            life_str = ">10^6 yrs" if years >= 1e6 else f"{years:.1f} yrs"
+            
+        print(_row(f"    Life    {comp}", "—", life_str, "—", "—"))
 
     print(sep_row)
 

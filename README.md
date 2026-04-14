@@ -4,32 +4,6 @@
 
 ---
 
-## For agents and teammates — read this first
-
-**Setup (one time):** Install [Claude Code](https://claude.ai/code), open this repo, start Claude — it automatically reads `CLAUDE.md` and loads all agent rules.
-
-**Key files:**
-
-| File | Purpose |
-|---|---|
-| `CLAUDE.md` | Agent definitions and mandatory rules — read before anything else |
-| `instructions.md` | Authoritative physics derivations and full technical spec |
-| `configs/generate/baseline.yaml` | Controls geometry ranges, sampling, and pass/fail limits |
-| `data/preview/` | All pipeline and preview-script outputs (default output directory) |
-
-**Making requests (plain English works):**
-
-| What you say | What Claude does |
-|---|---|
-| "I changed the rod formula" | Physics Validator + Cross-Reference Auditor |
-| "Run the data generation and check it" | Runs pipeline → Data Quality Checker |
-| "Is the dataset ready to train?" | ML Readiness Inspector |
-| "Everything looks wrong" | All four agents in parallel |
-
-> **For AI agents:** The To-Do list in this file is the authoritative backlog. It is intentionally large — do not attempt to complete it in one session. Pick one task, validate it with the appropriate subagent(s), commit, and stop.
-
----
-
 ## 1. What this project is
 
 A **physics-first data generation and ML pipeline** for the offset crank–slider mechanism, built for the MECH 390 Winter 2026 design project at Concordia University.
@@ -38,25 +12,26 @@ Physics generates the data. ML learns pass/fail patterns from it. No ML shortcut
 
 **Design specifications (fixed — not design variables):**
 
-| Spec | Value |
-|---|---|
-| Reaction force (slider load) | 500 g (~4.905 N) |
-| Range of motion (ROM target) | 250 mm ± 0.5 mm |
-| Input speed | 30 RPM |
-| Quick return ratio (QRR) | 1.5 – 2.5 |
-| Link material | Al 2024-T3 (ρ=2780 kg/m³, E=73.1 GPa, S_ut=483 MPa, S_y=345 MPa) |
-| Link geometry | Rectangular cross-section |
-| Slider–guide friction (μ) | 0.47 — dry machined Al–Al (Shigley's) |
+| Spec                         | Value                                                            |
+| ---------------------------- | ---------------------------------------------------------------- |
+| Reaction force (slider load) | 500 g (~4.905 N)                                                 |
+| Range of motion (ROM target) | 250 mm ± 0.5 mm                                                  |
+| Input speed                  | 30 RPM                                                           |
+| Quick return ratio (QRR)     | 1.5 – 2.5                                                        |
+| Link material                | Al 2024-T3 (ρ=2780 kg/m³, E=73.1 GPa, S_ut=483 MPa, S_y=345 MPa) |
+| Link geometry                | Rectangular cross-section                                        |
+| Slider–guide friction (μ)    | 0.47 — dry machined Al–Al (Shigley's)                            |
 
 **What the ML model must predict:**
+
 - Pass/fail classification for a given design configuration
 - Minimum safety factors (static and fatigue)
 - Optimal QRR to minimize crank torque and motor power
 
 **Optimization objectives (Week 8):**
+
 - Minimize mechanism envelope (size and weight)
 - Minimize required motor power while satisfying all design targets
-
 
 > CAD modeling, 3D-printed prototype, and the written report are handled outside this repository.
 
@@ -116,32 +91,32 @@ configs/generate/baseline.yaml
 
 **Hard constraints (enforced by Stage 1):**
 
-| Constraint | Value |
-|---|---|
-| ROM target | 250 mm ± 0.5 mm |
-| QRR | [1.5, 2.5] |
-| RPM | 30 (fixed, not a design variable) |
+| Constraint | Value                             |
+| ---------- | --------------------------------- |
+| ROM target | 250 mm ± 0.5 mm                   |
+| QRR        | [1.5, 2.5]                        |
+| RPM        | 30 (fixed, not a design variable) |
 
 **Key variable names** (full physics derivations in `instructions.md`):
 
-| Code key | Meaning | Unit |
-|---|---|---|
-| `r`, `l`, `e` | Crank radius, rod length, offset | m |
-| `theta`, `omega` | Crank angle, angular speed (= RPM × 2π/60) | rad, rad/s |
-| `ROM`, `QRR` | Slider stroke, quick-return ratio | m, — |
-| `width_r/l`, `thickness_r/l` | Link cross-sections | m |
-| `d_shaft_A` | Motor output shaft diameter at joint A | m |
-| `pin_diameter_B`, `pin_diameter_C` | Lug pin diameters at joints B and C | m |
-| `F_A`, `F_B`, `F_C` | Joint reaction vectors [Fx, Fy] | N |
-| `N`, `F_f`, `tau_A` | Slider normal, friction, drive torque | N, N, N·m |
-| `sigma_max`, `tau_max` | Peak normal/shear stress over cycle | Pa |
-| `n_static_rod/crank/pin` | Static FOS per link: sigma_limit / peak σ_link, with `sigma_limit = yield_stress/safety_factor` | — |
-| `total_mass` | mass_crank + mass_rod + mass_slider | kg |
-| `volume_envelope` | Bounding-box volume of assembled mechanism (T × H × L) | m³ |
-| `tau_A_max` | Peak motor torque over full cycle | N·m |
-| `E_rev` | Energy per revolution ∫τ dθ (discrete sum × 2π/24) | J |
-| `F_A_max`, `F_B_max`, `F_C_max` | Peak resultant force at each pin over cycle | N |
-| `pass_fail` | 1 = pass, 0 = fail | — |
+| Code key                           | Meaning                                                                                         | Unit       |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------- | ---------- |
+| `r`, `l`, `e`                      | Crank radius, rod length, offset                                                                | m          |
+| `theta`, `omega`                   | Crank angle, angular speed (= RPM × 2π/60)                                                      | rad, rad/s |
+| `ROM`, `QRR`                       | Slider stroke, quick-return ratio                                                               | m, —       |
+| `width_r/l`, `thickness_r/l`       | Link cross-sections                                                                             | m          |
+| `d_shaft_A`                        | Motor output shaft diameter at joint A                                                          | m          |
+| `pin_diameter_B`, `pin_diameter_C` | Lug pin diameters at joints B and C                                                             | m          |
+| `F_A`, `F_B`, `F_C`                | Joint reaction vectors [Fx, Fy]                                                                 | N          |
+| `N`, `F_f`, `tau_A`                | Slider normal, friction, drive torque                                                           | N, N, N·m  |
+| `sigma_max`, `tau_max`             | Peak normal/shear stress over cycle                                                             | Pa         |
+| `n_static_rod/crank/pin`           | Static FOS per link: sigma_limit / peak σ_link, with `sigma_limit = yield_stress/safety_factor` | —          |
+| `total_mass`                       | mass_crank + mass_rod + mass_slider                                                             | kg         |
+| `volume_envelope`                  | Bounding-box volume of assembled mechanism (T × H × L)                                          | m³         |
+| `tau_A_max`                        | Peak motor torque over full cycle                                                               | N·m        |
+| `E_rev`                            | Energy per revolution ∫τ dθ (discrete sum × 2π/24)                                              | J          |
+| `F_A_max`, `F_B_max`, `F_C_max`    | Peak resultant force at each pin over cycle                                                     | N          |
+| `pass_fail`                        | 1 = pass, 0 = fail                                                                              | —          |
 
 ---
 
@@ -149,7 +124,6 @@ configs/generate/baseline.yaml
 
 ```
 MECH390_ML_Model/
-├── CLAUDE.md
 ├── instructions.md
 ├── configs/
 │   ├── generate/
@@ -189,8 +163,17 @@ MECH390_ML_Model/
 │   ├── preview_forces.py        # ✅ Full pipeline → force sweep (4800 rows)
 │   ├── generate_dataset.py      # ✅ Full pipeline CLI → 7 CSVs
 │   ├── train_model.py           # ✅ Surrogate training CLI
-│   └── optimize_design.py       # ✅ Surrogate optimizer CLI
+│   ├── optimize_design.py       # ✅ Surrogate optimizer CLI
+│   ├── summarize_results.py     # ✅ Text report generator with infinite life limits
+│   └── generate_report.py       # ✅ Visual report generator (Heatmap, Learning Curves, Parity, Convergence, Sensitivity)
 ├── data/
+│   ├── models/
+│   │   ├── optuna_history.json      # Trial loss/metric records over epochs
+│   │   ├── validation_preds.npz     # Output tensor predictions for parity scatter
+│   │   └── surrogate_best.pt        # Top network state dict
+│   ├── results/
+│   │   ├── convergence_log.json     # DE optimizer progression history
+│   │   └── candidates.json          # Final top-N compiled design dicts
 │   ├── preview/                     # All quick-run outputs (preview_*.py + generate_dataset.py default)
 │   │   ├── stage1_geometries.csv    # 40 rows × 7 cols
 │   │   ├── stage2_designs.csv       # 200 rows × 27 cols
@@ -204,8 +187,10 @@ MECH390_ML_Model/
 │   │   └── failed_configs.csv       # N rows    — failing designs with all check columns
 │   ├── runs/       # Named production runs: --out-dir data/runs/<name>
 │   ├── processed/
-│   ├── splits/
-│   └── models/
+│   └── splits/
+├── reports/
+│   ├── optimization/                # Convergence curves & heatmap reports
+│   └── training/                    # Learning curves & parity validation plots
 └── tests/
     └── test_datagen_units.py    # Kinematics, datagen, import tests
 ```
@@ -320,46 +305,22 @@ No open bugs.
 
 ## 6. To-Do list
 
-> **For agents and contributors:** Open items only. Physics changes → **Physics Validator**. Signature changes → **Cross-Reference Auditor**. New data → **Data Quality Checker**.
+> Open items only.
 
 ### Dataset generation
 
 - [ ] **Fill `configs/generate/aggressive.yaml`** — wider ranges, higher n_samples (reference: `baseline.yaml`)
-- [ ] **Populate `data/splits/`** — train/val/test split CSVs from the full dataset
+- [ ] **Write train/val/test split CSVs before training** — `scripts/train_model.py` should write `data/splits/train.csv`, `data/splits/validate.csv`, and `data/splits/test.csv` immediately after `split_dataset()` returns and before any Optuna trial begins; the split is already fully computed at that point so no training needs to run first
 
 ### ML pipeline
 
-- [x] **Split regression training (ML-P8)** — per-batch masking in `train.py`: MSE loss computed only on pass rows within each mini-batch; fail rows contribute zero to regression gradient
-- [x] **Remove `min_n_static` from optimizer objectives (ML-P3)** — removed from `search.yaml`; weights redistributed: `total_mass=0.15`, `volume_envelope=0.30`, `tau_A_max=0.30`, `E_rev=0.25`
-- [x] **Refactor features (ML-P4)** — added `slenderness_r = r/thickness_r` and `slenderness_l = l/thickness_l` to `INPUT_FEATURES` (now 12); `RAW_GEO_KEYS` constant (10) preserves optimizer search space; `derive_input_features()` + `raw_to_model_input()` helpers added; `REGRESSION_TARGETS` unchanged
-- [x] **Update model defaults after ML-P4 (ML-P5)** — `input_dim` default in `models.py` unchanged (train.py derives from `len(F.INPUT_FEATURES)` dynamically); no hardcoded dims in training path
-- [x] **Restrict architecture search space (ML-P6)** — expanded for 10k rows: added `[512,256,128,64]`, `[1024,512,256,128]`, `[1024,512,256,128,64]` to `surrogate.yaml`
-- [x] **Add learning rate schedule (ML-P7)** — `CosineAnnealingLR` added to `train.py`; configurable via `lr_schedule` section in `surrogate.yaml` (`T_max=150`, `eta_min=1e-6`)
-- [x] **Validate regression quality** — val R² printed per regression target after each training run (added to `run_training()` in `train.py`)
-- [x] **Fix target normalisation (8.1)** — `normalize_targets()` warns on OOR values; `warn=False` default suppresses noise on train set (fail rows below pass-only range expected); `warn=True` used for val/test only
-- [x] **Stratify regression targets in split (8.2)** — `split_dataset()` logs a warning when any regression target mean differs >20% between train and val
-- [x] **Add checkpoint version field (8.5)** — `CHECKPOINT_VERSION = 1` in `models.py`; `save_checkpoint()` writes it; `validate_checkpoint_version()` called in `infer.py` and `optimize.py` — warns on missing (old checkpoint), raises on mismatch
-
 ### ~~🔴~~ ✅ Top priority — optimizer output quality (resolved)
 
-- [x] **Get surrogate optimizer producing physically valid Rank 1 candidates** — resolved. Both top candidates PASS full physics validation (val_f1=0.9715, arch=[512,256,128,64]). Subtasks:
-  - [x] **[CRITICAL] `target_stats` computed on all rows** — fixed in `features.py:compute_target_stats()`: now filters to `pass_fail == 1` rows only before computing min/max. Requires retrain + re-optimize.
-  - [x] **[CRITICAL] Filter top-N candidates by pass_prob** — fixed in `optimize.py`: candidates below `pass_threshold` or with non-positive score skipped before dedup; fallback warns and returns best-by-score if optimizer found nothing.
-  - [x] **[HIGH] 6 of 12 physics checks invisible to optimizer** — `min_n_fatigue = min(n_rod, n_crank, n_pin)` added to `REGRESSION_TARGETS` in `features.py` and as highest-weight objective (0.40, maximize) in `search.yaml`. Requires retrain.
-  - [x] **[HIGH] Raise `pass_fail_prob_min`** — raised `0.90 → 0.95` in `search.yaml`.
-  - [x] **[MEDIUM] Val MSE inconsistent with ML-P8** — same pass-mask now applied in val loop in `train.py`. Requires retrain.
-  - [x] **[MEDIUM] Config key mismatch in `optimize.py`** — `"P"` → `"m_block"` fixed.
-
 ### ML regression quality
-
-- [x] **Val R² was computed on all rows** — root cause found: R² logging used full val set (pass + fail), but model trained only on pass rows (ML-P8). Fail designs have wildly different `tau_A_max`/`E_rev`/`utilization` distributions → R²≈0 on mixed set. Fixed in `train.py`: R² now computed on pass rows only. True pass-only R²: `total_mass`=0.83, `volume_envelope`=0.82, `E_rev`=0.90, `tau_A_max`=0.63, `utilization`=0.68, `n_buck`=0.72, `n_shaft`=0.89, `min_n_fatigue`=0.75.
-- [x] **Unified pre-manufacturing terminal output** — `summarize_results.run()` called inline by `optimize_design.py`; Step 4 removed from `run_pipeline.py`. No redundant output between optimizer and report.
 
 ### Optimization and visualization
 
 - [ ] **`scripts/visualize_design.py`** — 2D mechanism drawing from design_id: crank, rod, slider with cross-section widths, pin circles at A/B/C, guide rail, annotated metrics
-- [ ] **Sensitivity plots** — each input feature vs `utilization` / `pass_fail`
-- [ ] **Parameter correlation map** — heatmap of feature–target correlations
 
 ### Physics and testing
 
@@ -371,14 +332,19 @@ No open bugs.
 - [ ] **Test infrastructure** — add pytest.ini or pyproject.toml test config; add shared fixtures
 - [ ] **Integration / regression test** — fixed-seed config → dataset → at least N passing designs; run as CI smoke test
 
+### Repository / Documentation
+
+- [x] **Add .pngs to .gitignore** — `reports/**/*.png` and `assets/*.png` are committed binary blobs; exclude to keep repo lean
+- [x] **Add .md files to .gitignore (except README)** — `CLAUDE.md`, `instructions.md`, `MECH_390_project_description_Winter_2026.md`, and all `.original.md` files should not be tracked (keep `README.md` only)
+- [x] **Remove Claude mentions from README.md** — strip all references to Claude / agent setup from `README.md`; keep them in `README.original.md` unchanged
+- [ ] **Appendix: input/output test dataset** — professor requires the model's test-set inputs and predictions in the final report appendix; export `data/splits/test.csv` + corresponding model predictions to a clean table (feature columns + all regression targets + `pass_fail` prediction vs ground truth)
+
 ### Code hygiene
 
-- [x] **Unified logging (9.1)** — summary `print()` block in `generate_dataset.py` converted to `logger.info()`
 - [ ] **Type annotations (9.2)** — add type hints to physics modules (dynamics.py, stresses.py, fatigue.py, buckling.py); configure mypy or pyright in pyproject.toml
 - [ ] **Symbol naming consistency (9.3)** — standardize rod dimension names: `generate.py` uses `w_rod`/`t_rod`; `stresses.py` uses `width`/`thickness`; `buckling.py` uses `w`/`t`; pick one convention across all physics files
 - [ ] **Remaining magic numbers (9.4)** — document or name: `1e-12` epsilon in `dynamics.py` (singular-matrix guard), `0.01` dedup tolerance in `optimize.py`, `0.808` in `fatigue.py` (Marin reliability factor)
 - [ ] **Docstring format (9.5)** — enforce a consistent docstring style (Google or NumPy) across all modules in `src/mech390/`; physics modules have inconsistent or missing parameter docs
-- [x] **`min_wall_mm` unit clarity (6.2)** — renamed to `min_wall_m` in `baseline.yaml` and all 4 readers (`stage2_embodiment.py`, `optimize.py`, `summarize_results.py`, `validate_candidate.py`)
 - [ ] **Scaler path assumption in infer.py (8.6)** — `SurrogatePredictor` infers scaler path from checkpoint path using string replacement; brittle if directory layout changes; accept explicit `scaler_path` argument instead
 - [ ] **`design_eval` god object (2.1 / 3.1)** — deferred: `design_eval` is a flat dict assembled in `generate.py` and consumed by the full physics stack; splitting it into typed sub-dicts would improve IDE support; tracked for future refactor when schema stabilises
 
@@ -394,31 +360,32 @@ No open bugs.
 
 ### Dataset (latest run snapshot)
 
-| Item | Value |
-|---|---|
-| Total rows | 10,000 (will change with config) |
-| Pass | 7,526 (75.3%) |
-| Fail | 2,474 (24.7%) |
-| Source config | `configs/generate/baseline.yaml` |
+| Item                | Value                                                                |
+| ------------------- | -------------------------------------------------------------------- |
+| Total rows          | 10,000 (will change with config)                                     |
+| Pass                | 7,526 (75.3%)                                                        |
+| Fail                | 2,474 (24.7%)                                                        |
+| Source config       | `configs/generate/baseline.yaml`                                     |
 | Post-rounding dedup | Applied in `generate.py` before CSV write; count reported in summary |
 
 ### Trained surrogate model (`data/models/`) — snapshot from last training run
 
-| Item | Value |
-|---|---|
-| Best val F1 | **0.9704** |
-| Architecture | `[512, 256, 128]` shared ReLU trunk + classification head + 9-target regression head |
-| Dropout | 0.269 |
-| Learning rate | 8.26 × 10⁻³ |
-| Batch size | 256 |
-| Optuna sweep | 50 trials × 300 epochs max, patience=25 |
-| Early stopping | On `val_f1` (not `val_loss`) |
-| Checkpoint | `data/models/surrogate_best.pt` |
-| Scaler | `data/models/scaler.pkl` |
-| Target stats | `data/models/target_stats.json` |
+| Item                    | Value                                                                                                                                                                   |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Best val F1             | **0.9704**                                                                                                                                                              |
+| Architecture            | `[512, 256, 128]` shared ReLU trunk + classification head + 9-target regression head                                                                                    |
+| Dropout                 | 0.269                                                                                                                                                                   |
+| Learning rate           | 8.26 × 10⁻³                                                                                                                                                             |
+| Batch size              | 256                                                                                                                                                                     |
+| Optuna sweep            | 50 trials × 300 epochs max, patience=25                                                                                                                                 |
+| Early stopping          | On `val_f1` (not `val_loss`)                                                                                                                                            |
+| Checkpoint              | `data/models/surrogate_best.pt`                                                                                                                                         |
+| Scaler                  | `data/models/scaler.pkl`                                                                                                                                                |
+| Target stats            | `data/models/target_stats.json`                                                                                                                                         |
 | Val R² (pass rows only) | `E_rev`=0.90, `n_shaft`=0.89, `total_mass`=0.83, `volume_envelope`=0.82, `min_n_fatigue`=0.75, `n_buck`=0.72, `utilization`=0.68, `tau_A_max`=0.63, `min_n_static`=0.63 |
 
 **Permanent architecture decisions (not dataset-size-dependent):**
+
 - Early stopping on `val_f1` — saves the best-classified model; regression loss can continue falling after classification peaks, so stopping on `val_loss` discards the optimal pass/fail epoch
 - `input_dim` and `n_reg_targets` derived from `len(F.INPUT_FEATURES)` and `len(F.REGRESSION_TARGETS)` in `train.py` — adding or removing features never requires touching `train.py` or `models.py`
 - `infer.py` asserts `ckpt['hparams']['n_reg_targets'] == len(F.REGRESSION_TARGETS)` at load — stale checkpoints are caught immediately, not silently
@@ -428,14 +395,14 @@ No open bugs.
 - Historical gap (pre ML-P2): Rank 1 optimizer candidate scored 0.97 on surrogate but 0.48 on physics — root cause was OOD predictions being silently clamped to [0, 1], giving free maximum scores
 - **ML-P2 implemented:** OOD predictions now penalised proportionally to weight × excess × `ood_penalty_scale`. A prediction 3× the training max produces a score deduction that dominates the entire objective, eliminating that candidate. Parameters configurable in `search.yaml` (`ood_tolerance: 0.1`, `ood_penalty_scale: 10.0`)
 - Best design found in training data (design 126, score=0.85) outperforms previous optimizer Rank 1 in physics validation
-- Three analytical constraints in `optimize.py` mitigate worst cases (see CLAUDE.md)
+- Three analytical constraints in `optimize.py` mitigate worst cases (see `instructions.md`)
 
 ### Physics verifications confirmed
 
-| Item | Confirmed value | Source |
-|---|---|---|
-| Fatigue strength `Sn` | 133 MPa at 18.72×10⁶ cycles | Al 2024-T3, ASM |
-| Basquin S-N constants | σa = 924 · N^(−0.086) | AA2024-T3 experimental anchors: (10⁷, 230 MPa) + (10⁹, 155 MPa) |
-| Size factor `C_s` | Mott Table 5-3 (split from `C_sur`) | `C_sur` = 0.88 as-machined |
+| Item                  | Confirmed value                     | Source                                                          |
+| --------------------- | ----------------------------------- | --------------------------------------------------------------- |
+| Fatigue strength `Sn` | 133 MPa at 18.72×10⁶ cycles         | Al 2024-T3, ASM                                                 |
+| Basquin S-N constants | σa = 924 · N^(−0.086)               | AA2024-T3 experimental anchors: (10⁷, 230 MPa) + (10⁹, 155 MPa) |
+| Size factor `C_s`     | Mott Table 5-3 (split from `C_sur`) | `C_sur` = 0.88 as-machined                                      |
 
 > Full derivations and code contracts for all physics quantities: see `instructions.md`.

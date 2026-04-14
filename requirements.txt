@@ -5,3 +5,5 @@ pyyaml
 torch
 optuna
 scikit-learn
+matplotlib
+seaborn
