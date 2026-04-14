@@ -385,6 +385,12 @@ def run_optimization(
     )
 
     logger.info("Running differential_evolution over %d-D space …", len(bounds))
+    
+    global_convergence_log = []
+    
+    def convergence_callback(xk, convergence=None):
+        global_convergence_log.append(float(-score_fn(xk))) # Record the un-negated score (maximize)
+
     result = differential_evolution(
         score_fn,
         bounds,
@@ -395,8 +401,17 @@ def run_optimization(
         mutation   = (0.5, 1.0),
         recombination = 0.7,
         workers    = 1,
+        callback   = convergence_callback,
     )
     logger.info("Optimizer converged: %s  (fun=%.6f)", result.success, result.fun)
+
+    # Save convergence log
+    out_dir = Path('data/results')
+    out_dir.mkdir(parents=True, exist_ok=True)
+    conv_path = out_dir / 'convergence_log.json'
+    logger.info("Saving convergence log to %s", conv_path)
+    with open(conv_path, 'w') as f:
+        json.dump(global_convergence_log, f)
 
     # --- Collect top-N by evaluating a grid of candidates from the final population ---
     # differential_evolution returns only the best; we re-evaluate the full population

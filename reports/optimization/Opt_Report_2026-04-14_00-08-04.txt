@@ -1,0 +1,161 @@
+================================================================================
+    MECH 390 — NEURAL NETWORK & DESIGN OPTIMIZATION REPORT    
+================================================================================
+Generated on : 2026-04-14_00-08-04
+Pipeline Dir : /Users/joseacosta/MECH390_ML_Model
+
+--- MACHINE LEARNING MODEL ARCHITECTURE ---
+Input features   : 12 dimensions
+Reg targets      : 9 targets
+Hidden Layers    : [512, 256, 128, 64]
+Dropout Rate     : 0.11976210716740304
+Validation F1    : 0.9868
+Total Epochs     : Auto-Stopped (Best Trial)
+
+--- OPTIMIZATION PRIORITY WEIGHTS & CONSTRAINTS ---
+The following weights were used by the Differential Evolution Algorithm
+to select the absolute best candidate out of millions of combinations:
+
+  min_n_fatigue        | Weight: 30.0% | Direction: maximize
+  volume_envelope      | Weight: 30.0% | Direction: minimize
+  tau_A_max            | Weight: 20.0% | Direction: minimize
+  E_rev                | Weight: 10.0% | Direction: minimize
+  total_mass           | Weight: 10.0% | Direction: minimize
+
+Hard Constraints Evaluated:
+  pass_fail_prob_min        = 0.95
+  penalty_net_section_scale = 1000.0
+  penalty_kinematic_scale   = 100.0
+  penalty_buckling_scale    = 1.0
+  ood_tolerance             = 0.1
+  ood_penalty_scale         = 10.0
+  penalty_rom_scale         = 200.0
+  penalty_qrr_scale         = 20.0
+
+================================================================================
+    TOP COMPILED OPTIMIZATION CANDIDATES (PHYSICS VALIDATED)    
+================================================================================
+
+
+════════════════════════════════════════════════════════════════════════════
+  PRE-MANUFACTURING REPORT  —  Top 1 Optimizer Candidates
+  Specs: ROM≈250mm | QRR 1.5–2.5 | Al 2024-T3 | 500g load | 30 RPM
+  Material: S_y=345 MPa  | σ_limit=345 MPa  | Cycles=18,720,000
+════════════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════════════
+  RANK 1  │  Surrogate score: 0.7732  │  pass_prob: 100.0%  │  Physics: PASS
+════════════════════════════════════════════════════════════════════════════
+  ──────────────────────────────────────────────────────────────────────────
+  GEOMETRY
+  ──────────────────────────────────────────────────────────────────────────
+  r  (crank)        102.63 mm              width_r            19.99 mm
+  l  (rod)          254.01 mm              thickness_r         3.99 mm
+  e  (offset)       126.68 mm              width_l            18.12 mm
+                                          thickness_l         3.73 mm
+  ROM (actual)      250.50 mm  [OK  ]      pin_A (shaft)       8.00 mm
+  QRR (actual)       1.500     [OK  ]      pin_B               4.00 mm
+                                          pin_C               4.00 mm
+
+  ──────────────────────────────────────────────────────────────────────────
+  PERFORMANCE  (Surrogate predicted  vs  Physics actual)
+  ──────────────────────────────────────────────────────────────────────────
+  Metric                          Predicted       Actual      Limit Status
+  ──────────────────────────────────────────────────────────────────────────
+  total_mass                         82.7 g       93.2 g          —      —
+  volume_envelope               1993.21 cm³  2134.65 cm³          —      —
+  tau_A_max                      0.2606 N·m   0.2766 N·m          —      —
+  E_rev                            0.5766 J     0.6036 J          —      —
+  ──────────────────────────────────────────────────────────────────────────
+  utilization                             —        0.014     ≤1.000   PASS
+  n_buck                                  —       270.51      ≥3.00   PASS
+  n_shaft                             61.72        66.40      ≥2.00   PASS
+  min_n_static  (min of 3 links)        91.22       251.68      ≥1.00   PASS
+  min_n_fatigue  (min of 3 links)        23.25        33.53      ≥1.00   PASS
+  ──────────────────────────────────────────────────────────────────────────
+    — per-link detail (physics only) —                                            
+    n_static  rod                         —       344.29      ≥1.00   PASS
+    n_static  crank                       —       251.68      ≥1.00   PASS
+    n_static  pin                         —       268.57      ≥1.00   PASS
+    n_fatigue rod                         —       148.39      ≥1.00   PASS
+    n_fatigue crank                       —        62.62      ≥1.00   PASS
+    n_fatigue pin                         —        33.53      ≥1.00   PASS
+    D_miner   rod                         —       0.0000    ≤1.0000   PASS
+      Life    rod                         —     Infinite          —      —
+    D_miner   crank                       —       0.0000    ≤1.0000   PASS
+      Life    crank                       —     Infinite          —      —
+    D_miner   pin                         —       0.0000    ≤1.0000   PASS
+      Life    pin                         —     Infinite          —      —
+  ──────────────────────────────────────────────────────────────────────────
+
+  NET-SECTION MARGINS  (need > 0  |  min_net = 1.100 mm)
+  width_r – pin_A: +10.89 mm [OK  ]         width_r – pin_B: +14.89 mm [OK  ]
+  width_l – pin_B: +13.02 mm [OK  ]         width_l – pin_C: +13.02 mm [OK  ]
+
+════════════════════════════════════════════════════════════════════════════
+  OVERALL VERDICT: PASS
+════════════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════════════
+  SUMMARY  1/1 candidates passed full physics validation
+  ▶ Rank 1 is the primary manufacture candidate.
+════════════════════════════════════════════════════════════════════════════
+
+────────────────────────────────────────────────────────────────────────────
+  DATASET BEST — highest-scoring design in training data (actual physics values)
+  Compare against Rank 1 to assess surrogate optimizer quality.
+────────────────────────────────────────────────────────────────────────────
+
+════════════════════════════════════════════════════════════════════════════
+  DATASET BEST  (actual train values)  │  Objective score: 0.8633  │  pass_prob: 100.0%  │  Physics: PASS
+════════════════════════════════════════════════════════════════════════════
+  ──────────────────────────────────────────────────────────────────────────
+  GEOMETRY
+  ──────────────────────────────────────────────────────────────────────────
+  r  (crank)         83.00 mm              width_r            16.00 mm
+  l  (rod)          299.00 mm              thickness_r         4.00 mm
+  e  (offset)       203.00 mm              width_l            18.00 mm
+                                          thickness_l         2.00 mm
+  ROM (actual)      249.79 mm  [OK  ]      pin_A (shaft)       8.00 mm
+  QRR (actual)       1.534     [OK  ]      pin_B               3.90 mm
+                                          pin_C               2.50 mm
+
+  ──────────────────────────────────────────────────────────────────────────
+  PERFORMANCE  (CSV training values  vs  Physics re-validation)
+  ──────────────────────────────────────────────────────────────────────────
+  Metric                         CSV actual Re-validated      Limit Status
+  ──────────────────────────────────────────────────────────────────────────
+  total_mass                         67.3 g       67.3 g          —      —
+  volume_envelope               2466.25 cm³  2466.25 cm³          —      —
+  tau_A_max                      0.2106 N·m   0.2106 N·m          —      —
+  E_rev                            0.3245 J     0.3245 J          —      —
+  ──────────────────────────────────────────────────────────────────────────
+  utilization                         0.012        0.012     ≤1.000   PASS
+  n_buck                              36.36        36.36      ≥3.00   PASS
+  n_shaft                             67.56        67.56      ≥2.00   PASS
+  min_n_static  (min of 3 links)       108.23       108.23      ≥1.00   PASS
+  min_n_fatigue  (min of 3 links)        34.14        34.14      ≥1.00   PASS
+  ──────────────────────────────────────────────────────────────────────────
+    — per-link detail (physics only) —                                            
+    n_static  rod                         —       108.23      ≥1.00   PASS
+    n_static  crank                       —       179.92      ≥1.00   PASS
+    n_static  pin                         —       200.77      ≥1.00   PASS
+    n_fatigue rod                         —        34.14      ≥1.00   PASS
+    n_fatigue crank                       —        39.84      ≥1.00   PASS
+    n_fatigue pin                         —        41.69      ≥1.00   PASS
+    D_miner   rod                         —       0.0000    ≤1.0000   PASS
+      Life    rod                         —     Infinite          —      —
+    D_miner   crank                       —       0.0000    ≤1.0000   PASS
+      Life    crank                       —     Infinite          —      —
+    D_miner   pin                         —       0.0000    ≤1.0000   PASS
+      Life    pin                         —     Infinite          —      —
+  ──────────────────────────────────────────────────────────────────────────
+
+  NET-SECTION MARGINS  (need > 0  |  min_net = 1.100 mm)
+  width_r – pin_A: +6.90 mm [OK  ]          width_r – pin_B: +11.00 mm [OK  ]
+  width_l – pin_B: +13.00 mm [OK  ]         width_l – pin_C: +14.40 mm [OK  ]
+
+════════════════════════════════════════════════════════════════════════════
+  OVERALL VERDICT: PASS
+════════════════════════════════════════════════════════════════════════════
+

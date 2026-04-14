@@ -20,12 +20,12 @@
 
 objectives:
   min_n_fatigue:
-    weight:    0.40
+    weight:    0.30
     direction: maximize       # highest-weight: fatigue FoS is the binding constraint
                               # at 18.72M cycles; surrogate now predicts min(n_rod, n_crank, n_pin)
 
   volume_envelope:
-    weight:    0.20
+    weight:    0.30
     direction: minimize       # smaller footprint → easier to fit/mount
 
   tau_A_max:
@@ -89,5 +89,5 @@ optimizer:
   method:         differential_evolution
   n_top_results:  3           # number of top-ranked geometries to report
   seed:           42
-  maxiter:        500         # max iterations for differential_evolution
+  maxiter:        1500         # max iterations for differential_evolution
   popsize:        15          # population size multiplier (total pop = popsize × n_vars)

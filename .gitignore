@@ -4,8 +4,24 @@ __pycache__/
 *$py.class
 *.so
 
+# Data & Weights (Huge Files)
+*.csv
+data/runs/
+data/preview/
+data/models/
+data/results/
+!data/models/surrogate_best.pt
+
+# Images
+*.png
+
+# Documentation (keep only README.md)
+*.md
+!README.md
+
 # Environments
 venv/
+.venv/
 .env
 
 # MacOS
