@@ -2,6 +2,7 @@
 
 **MECH 390 – Machine Learning–Assisted Mechanical Design**
 
+Link: https://github.com/Joseacosta21/MECH390_ML_Model
 ---
 
 ## 1. What this project is
