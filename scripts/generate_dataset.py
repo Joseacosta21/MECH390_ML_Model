@@ -32,9 +32,12 @@ Usage
 
 import argparse
 import logging
+import random
 import sys
 import time
 from pathlib import Path
+
+import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -85,10 +88,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "--out-dir", metavar="PATH", default=str(DEFAULT_OUT_DIR),
         help="Directory where all CSV files are written.",
     )
+    parser.add_argument(
+        "--log-level", metavar="LEVEL", default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging verbosity.",
+    )
     return parser
 
 
+def _seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        import torch
+        torch.manual_seed(seed)
+    except ImportError:
+        pass
+
+
 def run(config_path, seed, out_dir: Path) -> None:
+    if seed is not None:
+        _seed_everything(seed)
+
     # ---- Load config ---------------------------------------------------------
     if config_path is not None:
         logger.info("Loading config from: %s", config_path)
@@ -103,39 +124,26 @@ def run(config_path, seed, out_dir: Path) -> None:
     # ---- Run pipeline --------------------------------------------------------
     logger.info("Starting full pipeline …")
     t0 = time.perf_counter()
-    result = generate_dataset(config, seed=seed)
+    # Pass out_dir to leverage memory-efficient chunked writes directly
+    result = generate_dataset(config, seed=seed, out_dir=out_dir)
     elapsed = time.perf_counter() - t0
-
-    # ---- Write CSVs ----------------------------------------------------------
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    written = []
-    for attr, filename in _OUTPUTS:
-        df = getattr(result, attr)
-        out_path = out_dir / filename
-        df.to_csv(out_path, index=False)
-        written.append((filename, len(df), out_path))
-        logger.info("Wrote %s — %d rows → %s", filename, len(df), out_path)
 
     # ---- Summary -------------------------------------------------------------
     s = result.summary
-    print("\n" + "=" * 68)
-    print("  Dataset Generation — Summary")
-    print("=" * 68)
-    print(f"  Stage-1 valid 2D designs  : {s.get('n_stage1', '?'):>10,}")
-    print(f"  Stage-2 3D candidates     : {s.get('n_stage2', '?'):>10,}")
-    print(f"  Dropped (physics errors)  : {s.get('n_dropped', '?'):>10,}")
-    print(f"  Duplicates removed        : {s.get('n_duplicates_removed', 0):>10,}")
-    print(f"  Evaluated                 : {s.get('n_evaluated', '?'):>10,}")
-    print(f"  Passed                    : {s.get('n_passed', '?'):>10,}")
-    print(f"  Failed                    : {s.get('n_failed', '?'):>10,}")
-    print(f"  Pass rate                 : {s.get('pass_rate', 0.0):>10.1%}")
-    print(f"  Wall time                 : {elapsed:>10.2f} s")
-    print()
-    print("  Output files:")
-    for filename, nrows, path in written:
-        print(f"    {filename:<25}  {nrows:>6,} rows  →  {path}")
-    print("=" * 68)
+    logger.info("=" * 68)
+    logger.info("  Dataset Generation — Summary")
+    logger.info("=" * 68)
+    logger.info("  Stage-1 valid 2D designs  : %10s", f"{s.get('n_stage1', '?'):,}" if isinstance(s.get('n_stage1'), int) else "?")
+    logger.info("  Stage-2 3D candidates     : %10s", f"{s.get('n_stage2', '?'):,}" if isinstance(s.get('n_stage2'), int) else "?")
+    logger.info("  Dropped (physics errors)  : %10s", f"{s.get('n_dropped', '?'):,}" if isinstance(s.get('n_dropped'), int) else "?")
+    logger.info("  Duplicates removed        : %10s", f"{s.get('n_duplicates_removed', 0):,}")
+    logger.info("  Evaluated                 : %10s", f"{s.get('n_evaluated', '?'):,}" if isinstance(s.get('n_evaluated'), int) else "?")
+    logger.info("  Passed                    : %10s", f"{s.get('n_passed', '?'):,}" if isinstance(s.get('n_passed'), int) else "?")
+    logger.info("  Failed                    : %10s", f"{s.get('n_failed', '?'):,}" if isinstance(s.get('n_failed'), int) else "?")
+    logger.info("  Pass rate                 : %10.1f%%", s.get('pass_rate', 0.0) * 100)
+    logger.info("  Wall time                 : %10.2f s", elapsed)
+    logger.info("  Output files exported to  : %s", out_dir)
+    logger.info("=" * 68)
 
     if s.get('n_evaluated', 0) == 0:
         logger.error("No designs were evaluated. Check config bounds and physics setup.")
@@ -145,6 +153,7 @@ def run(config_path, seed, out_dir: Path) -> None:
 def main() -> None:
     parser = _build_parser()
     args   = parser.parse_args()
+    logging.getLogger().setLevel(args.log_level)
     out_dir = Path(args.out_dir).resolve()
 
     try:

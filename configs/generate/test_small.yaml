@@ -20,14 +20,14 @@ geometry:
     thickness_r: {min: 0.005, max: 0.02}
     thickness_l: {min: 0.005, max: 0.02}
   pin_diameters:
-    pin_diameter_A: {min: 0.002, max: 0.005}
+    d_shaft_A: {min: 0.003, max: 0.008}
     pin_diameter_B: {min: 0.002, max: 0.005}
     pin_diameter_C: {min: 0.002, max: 0.005}
 
 
 operating:
   RPM: 30
-  P: 0.5
+  m_block: 0.5
   mu: 0.2
   ROM: 0.25
   ROM_tolerance: 0.0005           # ±0.5 mm
@@ -51,8 +51,6 @@ sweep:
   theta_step_deg: 15
 
 limits:
-  sigma_allow: 180e6
-  tau_allow: 100e6
   safety_factor: 1.0
 
 output:

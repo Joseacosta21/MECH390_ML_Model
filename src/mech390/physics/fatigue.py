@@ -17,8 +17,9 @@ Material properties are read from the design dict (injected by generate.py
 from baseline.yaml). Required keys:
     'S_ut'          — ultimate tensile strength (Pa)
     'S_y'           — yield strength (Pa)
-    'S_prime_e'     — reference fatigue strength at 10^8 cycles (Pa)
-    'sigma_f_prime' — fatigue strength coefficient (Pa)
+    'Sn'            — fatigue strength at design life cycles (Pa)
+    'basquin_A'     — Basquin intercept A (Pa); AA2024-T3: 924 MPa
+    'basquin_b'     — Basquin slope b (dimensionless); AA2024-T3: -0.086
     'n_rpm'         — crank rotational speed (RPM)
     'total_cycles'  — design life in cycles for Miner's rule check
 
@@ -35,130 +36,117 @@ import numpy as np
 
 from mech390.physics._utils import get_or_warn
 
-# Fallback defaults (overridden by config via design dict)
-_N_BASQUIN_ANCHOR_DEFAULT: float = 2.0e6   # cycles — baseline.yaml stress_analysis.N_basquin_anchor
-_Z_A_RELIABILITY_DEFAULT: float = 3.091    # 99.9% — baseline.yaml stress_analysis.z_a_reliability
+# All Marin correction factors and Basquin constants are required arguments.
+# They must be injected from the design dict (read from baseline.yaml by generate.py).
+# Missing keys surface via get_or_warn() in evaluate_fatigue() — no silent fallbacks.
 
 
 # ---------------------------------------------------------------------------
-# Marin correction factors (Mother Doc Section 10.2)
+# Fatigue correction factors (Mott Ch. 5)
 # ---------------------------------------------------------------------------
 
-def _k_a(S_ut: float) -> float:
+def _C_s_size(d_mm: float) -> float:
     """
-    Surface factor for machined finish (Mother Doc Section 10.2).
-
-    k_a = 4.51 * S_ut^(-0.265)  with S_ut in MPa.
+    Size factor C_s for any cross-section (Mott Table 5-3).
 
     Args:
-        S_ut: ultimate tensile strength (Pa)
+        d_mm: equivalent diameter in mm
+              (for rectangular sections: d_e = 0.808 * sqrt(w * t) * 1000;
+               for circular pins: d_e = pin diameter * 1000)
+
+    Returns:
+        C_s (dimensionless)
     """
-    S_ut_MPa = S_ut / 1e6
-    return 4.51 * S_ut_MPa ** (-0.265)
+    if d_mm <= 7.62:
+        return 1.0
+    elif d_mm <= 50.0:
+        return (d_mm / 7.62) ** (-0.11)
+    else:
+        return 0.859 - 0.000837 * d_mm
 
 
-def _k_b_rect(w: float, t: float) -> float:
+def _C_s_size_rect(w: float, t: float) -> float:
     """
-    Size factor for rectangular cross-section in bending (Mother Doc Eq 10.2).
+    Size factor for rectangular cross-section in bending (Mott Table 5-3).
 
-    Equivalent diameter: d_e = 0.808 * sqrt(w * t)
-    Piecewise per Shigley / Mother Doc (d_e in mm):
-      d_e <= 51 mm : k_b = 0.879 * d_e^(-0.107)
-      d_e >  51 mm : k_b = 1.24  * d_e^(-0.107)
+    Equivalent diameter per Mott: d_e = 0.808 * sqrt(w * t)
 
     Args:
         w: link width (m)
         t: link thickness (m)
     """
     d_e_mm = 0.808 * math.sqrt(w * t) * 1e3
-    if d_e_mm <= 51.0:
-        return 0.879 * d_e_mm ** (-0.107)
-    return 1.24 * d_e_mm ** (-0.107)
+    return _C_s_size(d_e_mm)
 
 
-def _k_b_pin(d: float) -> float:
+def _C_s_size_pin(d: float) -> float:
     """
-    Size factor for circular pin section (d_e = pin diameter).
+    Size factor for circular pin section (Mott Table 5-3).
 
     Args:
         d: pin diameter (m)
     """
-    d_mm = d * 1e3
-    if d_mm <= 51.0:
-        return 0.879 * d_mm ** (-0.107)
-    return 1.24 * d_mm ** (-0.107)
+    return _C_s_size(d * 1e3)
 
 
-def _k_c() -> float:
-    """Load factor = 1.0 (Von Mises applied separately; Mother Doc Section 10.2)."""
-    return 1.0
-
-
-def _k_d() -> float:
-    """Temperature factor = 1.0 for T <= 70°C (Mother Doc Section 10.2)."""
-    return 1.0
-
-
-def _k_e(z_a: float = _Z_A_RELIABILITY_DEFAULT) -> float:
-    """
-    Reliability factor (Mother Doc Section 10.2).
-
-    k_e = 1 - 0.08 * z_a
-    Default z_a = 3.091 (99.9% reliability).
-
-    Args:
-        z_a: reliability z-value (dimensionless)
-    """
-    return 1.0 - 0.08 * z_a
-
-
-def _k_f() -> float:
-    """Miscellaneous factor = 1.0 (no fretting; Mother Doc Section 10.2)."""
-    return 1.0
-
-
-def _endurance_limit_rect(
-    w: float, t: float, S_ut: float, S_prime_e: float,
-    z_a: float = _Z_A_RELIABILITY_DEFAULT,
+def _sn_prime_rect(
+    w: float, t: float, Sn: float,
+    C_sur: float,
+    C_st: float,
+    C_R: float,
+    C_m: float,
+    C_f: float,
 ) -> float:
     """
-    Corrected endurance limit for a rectangular link section (Mother Doc Eq 10.1).
+    Corrected fatigue strength for a rectangular link section (Mott Ch. 5).
 
-        S_e = k_a * k_b * k_c * k_d * k_e * k_f * S'_e
+        S'n = Sn * C_sur * C_s * C_st * C_R * C_m * C_f
 
     Args:
-        w: link width (m)
-        t: link thickness (m)
-        S_ut: ultimate tensile strength (Pa)
-        S_prime_e: reference fatigue strength at 10^8 cycles (Pa)
-        z_a: reliability z-value (dimensionless)
+        w:    link width (m)
+        t:    link thickness (m)
+        Sn:   uncorrected fatigue strength at design life cycles (Pa); AA2024-T3: 133 MPa @ 18.72M cycles
+        C_sur: surface finish factor (from config; Mott Table 5-4)
+        C_st:  load / stress-type factor
+        C_R:   reliability factor
+        C_m:   material factor
+        C_f:   miscellaneous factor
 
     Returns:
-        S_e (Pa)
+        S_n_prime (Pa)
     """
-    return _k_a(S_ut) * _k_b_rect(w, t) * _k_c() * _k_d() * _k_e(z_a) * _k_f() * S_prime_e
+    C_s = _C_s_size_rect(w, t)
+    return Sn * C_sur * C_s * C_st * C_R * C_m * C_f
 
 
-def _endurance_limit_pin(
-    d: float, S_ut: float, S_prime_e: float,
-    z_a: float = _Z_A_RELIABILITY_DEFAULT,
+def _sn_prime_pin(
+    d: float, Sn: float,
+    C_sur: float,
+    C_st: float,
+    C_R: float,
+    C_m: float,
+    C_f: float,
 ) -> float:
     """
-    Corrected endurance limit for a circular pin section (Mother Doc Eq 10.1).
+    Corrected fatigue strength for a circular pin section (Mott Ch. 5).
 
     Uses pin diameter as the equivalent diameter (circular section).
-    Most conservative pin diameter (smallest) is recommended for S_e_pin.
+    Most conservative pin diameter (smallest) is recommended for S_n_prime_pin.
 
     Args:
-        d: pin diameter (m)
-        S_ut: ultimate tensile strength (Pa)
-        S_prime_e: reference fatigue strength at 10^8 cycles (Pa)
-        z_a: reliability z-value (dimensionless)
+        d:    pin diameter (m)
+        Sn:   uncorrected fatigue strength at design life cycles (Pa); AA2024-T3: 133 MPa @ 18.72M cycles
+        C_sur: surface finish factor (from config; Mott Table 5-4)
+        C_st:  load / stress-type factor
+        C_R:   reliability factor
+        C_m:   material factor
+        C_f:   miscellaneous factor
 
     Returns:
-        S_e (Pa)
+        S_n_prime (Pa)
     """
-    return _k_a(S_ut) * _k_b_pin(d) * _k_c() * _k_d() * _k_e(z_a) * _k_f() * S_prime_e
+    C_s = _C_s_size_pin(d)
+    return Sn * C_sur * C_s * C_st * C_R * C_m * C_f
 
 
 # ---------------------------------------------------------------------------
@@ -196,49 +184,31 @@ def _stress_cycle(
 # Section 13: Basquin / S-N finite life helpers (Mother Doc Eqs 13.1-13.7)
 # ---------------------------------------------------------------------------
 
-def _basquin_exponent(
-    S_e: float, S_ut: float,
-    N_anchor: float = _N_BASQUIN_ANCHOR_DEFAULT,
-) -> float:
-    """
-    Basquin exponent b_B (Mother Doc Eq 13.3).
-
-    Two-point S-N method:
-        b_B = -log10(0.9 * S_ut / S_e) / log10(2 * N_anchor)
-
-    Args:
-        S_e:      corrected endurance limit (Pa)
-        S_ut:     ultimate tensile strength (Pa)
-        N_anchor: S-N curve second anchor point (cycles)
-    """
-    return -math.log10(0.9 * S_ut / S_e) / math.log10(2.0 * N_anchor)
-
-
 def _cycles_to_failure(
     sigma_a_eq: float,
-    S_e: float,
-    S_ut: float,
-    sigma_f_prime: float,
-    N_anchor: float = _N_BASQUIN_ANCHOR_DEFAULT,
+    basquin_A: float,
+    basquin_b: float,
 ) -> float:
     """
-    Cycles to failure N_f from Basquin relation (Mother Doc Eq 13.4).
+    Cycles to failure N_f from experimental Basquin S-N curve.
 
-        N_f = (1/2) * (sigma_a_eq / sigma'_f)^(1/b_B)
+        σa = A · N_f^b  →  N_f = (σa / A)^(1/b)
+
+    Source: AA2024-T3 experimental data, fully reversed (R=-1)
+        Anchors: (10^7 cycles, 230 MPa) and (10^9 cycles, 155 MPa)
+        b = -0.086,  A = 924 MPa
+    Valid range: 10^5 to 10^9 cycles.
 
     Returns inf if sigma_a_eq <= 0 (no alternating stress).
 
     Args:
-        sigma_a_eq:    Von Mises equivalent alternating stress (Pa)
-        S_e:           corrected endurance limit (Pa)
-        S_ut:          ultimate tensile strength (Pa)
-        sigma_f_prime: fatigue strength coefficient (Pa)
-        N_anchor:      S-N curve second anchor point (cycles)
+        sigma_a_eq: Von Mises equivalent alternating stress (Pa)
+        basquin_A:  Basquin intercept (Pa)
+        basquin_b:  Basquin slope (dimensionless, negative)
     """
     if sigma_a_eq <= 0.0:
         return float('inf')
-    b_B = _basquin_exponent(S_e, S_ut, N_anchor)
-    return 0.5 * (sigma_a_eq / sigma_f_prime) ** (1.0 / b_B)
+    return (sigma_a_eq / basquin_A) ** (1.0 / basquin_b)
 
 
 def _life_seconds(N_f: float, n_rpm: float) -> float:
@@ -261,13 +231,13 @@ def _life_seconds(N_f: float, n_rpm: float) -> float:
 def _component_fatigue(
     sigma_history: np.ndarray,
     tau_history: np.ndarray,
-    S_e: float,
+    S_n_prime: float,
     S_ut: float,
     S_y: float,
-    sigma_f_prime: float,
     n_rpm: float,
     total_cycles: Optional[float],
-    N_anchor: float = _N_BASQUIN_ANCHOR_DEFAULT,
+    basquin_A: float,
+    basquin_b: float,
 ) -> Dict[str, Any]:
     """
     Compute full fatigue analysis for one structural component.
@@ -275,17 +245,17 @@ def _component_fatigue(
     Args:
         sigma_history:  normal stress over one revolution (Pa)
         tau_history:    shear stress over one revolution (Pa)
-        S_e:            corrected endurance limit for this component (Pa)
+        S_n_prime:      corrected fatigue strength for this component (Pa)
         S_ut:           ultimate tensile strength (Pa)
         S_y:            yield strength (Pa)
-        sigma_f_prime:  fatigue strength coefficient (Pa)
         n_rpm:          crank speed (RPM)
         total_cycles:   design life in cycles (None = skip Miner)
-        N_anchor:       Basquin S-N anchor point (cycles)
+        basquin_A:      Basquin intercept A (Pa); AA2024-T3: 924 MPa
+        basquin_b:      Basquin slope b (dimensionless); AA2024-T3: -0.086
 
     Returns:
         dict with generic keys (prefixed by caller): sigma_max, sigma_min,
-        sigma_m, sigma_a, tau_m, tau_a, R, sigma_a_eq, sigma_m_eq, S_e,
+        sigma_m, sigma_a, tau_m, tau_a, R, sigma_a_eq, sigma_m_eq, S_n_prime,
         n_f, n_y, n, b_B, N_f, t_f, D, failed_miner.
     """
     # --- Section 9: Stress cycling ---
@@ -297,8 +267,8 @@ def _component_fatigue(
     sigma_m_eq = math.sqrt(sigma_m**2 + 3.0 * tau_m**2)
 
     # --- Section 12.1: Modified Goodman fatigue safety factor (Eq 12.2) ---
-    # n_f = 1 / (sigma_a_eq/S_e + sigma_m_eq/S_ut)
-    denom_goodman = sigma_a_eq / S_e + sigma_m_eq / S_ut
+    # n_f = 1 / (sigma_a_eq/S'n + sigma_m_eq/S_ut)
+    denom_goodman = sigma_a_eq / S_n_prime + sigma_m_eq / S_ut
     n_f = 1.0 / denom_goodman if denom_goodman > 0.0 else float('inf')
 
     # --- Section 12.2: ECY safety factor (Eq 12.4) ---
@@ -310,8 +280,9 @@ def _component_fatigue(
     n = min(n_f, n_y)
 
     # --- Section 13: Basquin / S-N finite life ---
-    b_B = _basquin_exponent(S_e, S_ut, N_anchor)
-    N_f = _cycles_to_failure(sigma_a_eq, S_e, S_ut, sigma_f_prime, N_anchor)
+    # b_B is the experimental Basquin slope — same for all components
+    b_B = basquin_b
+    N_f = _cycles_to_failure(sigma_a_eq, basquin_A, basquin_b)
     t_f = _life_seconds(N_f, n_rpm)
 
     # --- Section 13.6-13.7: Miner's rule ---
@@ -331,7 +302,7 @@ def _component_fatigue(
         'R':            R,
         'sigma_a_eq':   sigma_a_eq,
         'sigma_m_eq':   sigma_m_eq,
-        'S_e':          S_e,
+        'S_n_prime':    S_n_prime,
         'n_f':          n_f,
         'n_y':          n_y,
         'n':            n,
@@ -364,17 +335,19 @@ def evaluate(
     the per-step stress arrays collected from stresses.evaluate().
 
     Material properties required in design dict (injected by generate.py):
-        'S_ut'          — ultimate tensile strength (Pa)
-        'S_y'           — yield strength (Pa)
-        'S_prime_e'     — reference fatigue strength at 10^8 cycles (Pa)
-        'sigma_f_prime' — fatigue strength coefficient (Pa)
-        'n_rpm'         — crank speed (RPM)
-        'total_cycles'  — design life in cycles
+        'S_ut'       — ultimate tensile strength (Pa)
+        'S_y'        — yield strength (Pa)
+        'Sn'         — fatigue strength at design life (Pa); AA2024-T3: 133 MPa
+        'basquin_A'  — Basquin intercept A (Pa); AA2024-T3: 924 MPa
+        'basquin_b'  — Basquin slope b (dimensionless); AA2024-T3: -0.086
+        'n_rpm'      — crank speed (RPM)
+        'total_cycles' — design life in cycles
 
     Geometry required in design dict:
         'width_l', 'thickness_l'              — rod cross-section (m)
         'width_r', 'thickness_r'              — crank cross-section (m)
-        'pin_diameter_A/B/C'                  — pin diameters (m)
+        'pin_diameter_B', 'pin_diameter_C'    — lug pin diameters (m)
+        # d_shaft_A excluded: shaft A uses Mott 12-24 check in engine.py
 
     Args:
         sigma_rod_history   : normal stress in rod at each sweep step (Pa)
@@ -388,42 +361,52 @@ def evaluate(
     Returns:
         dict with keys prefixed by component name:
             Rod   : 'sigma_max_rod', 'n_f_rod', 'n_y_rod', 'n_rod', 'N_f_rod',
-                    't_f_rod', 'D_rod', 'failed_miner_rod', 'S_e_rod',
+                    't_f_rod', 'D_rod', 'failed_miner_rod', 'S_n_prime_rod',
                     'sigma_a_eq_rod', 'sigma_m_eq_rod', 'b_B_rod', ...
             Crank : same pattern with '_crank' suffix
             Pin   : same pattern with '_pin' suffix
     """
     # --- Material properties (from design dict; fallback to 2024-T3 Al defaults) ---
     _ctx = 'fatigue.evaluate'
-    S_ut          = float(get_or_warn(design, 'S_ut',          483e6,  context=_ctx))
-    S_y           = float(get_or_warn(design, 'S_y',           345e6,  context=_ctx))
-    S_prime_e     = float(get_or_warn(design, 'S_prime_e',     130e6,  context=_ctx))
-    sigma_f_prime = float(get_or_warn(design, 'sigma_f_prime', 807e6,  context=_ctx))
-    n_rpm         = float(get_or_warn(design, 'n_rpm',         30.0,   context=_ctx))
+    S_ut = float(get_or_warn(design, 'S_ut', 483e6, context=_ctx))
+    S_y  = float(get_or_warn(design, 'S_y',  345e6, context=_ctx))
+    Sn   = float(get_or_warn(design, 'Sn',   133e6, context=_ctx))
+    n_rpm = float(get_or_warn(design, 'n_rpm', 30.0, context=_ctx))
     total_cycles_raw = get_or_warn(design, 'total_cycles', None, context=_ctx)
     total_cycles: Optional[float] = (
         float(total_cycles_raw) if total_cycles_raw is not None else None
     )
 
-    # Configurable fatigue constants (from baseline.yaml via design dict)
-    N_anchor = float(get_or_warn(design, 'N_basquin_anchor', _N_BASQUIN_ANCHOR_DEFAULT, context=_ctx))
-    z_a      = float(get_or_warn(design, 'z_a_reliability',  _Z_A_RELIABILITY_DEFAULT,  context=_ctx))
+    # Configurable fatigue constants — must be injected from baseline.yaml
+    try:
+        basquin_A = float(design['basquin_A'])
+        basquin_b = float(design['basquin_b'])
+        C_sur     = float(design['C_sur'])
+        C_st      = float(design['C_st'])
+        C_R       = float(design['C_R'])
+        C_m       = float(design['C_m'])
+        C_f       = float(design['C_f'])
+    except KeyError as exc:
+        raise KeyError(
+            f"fatigue.evaluate: required key {exc} missing from design dict. "
+            f"Ensure generate.py / validate_candidate.py injects all stress_analysis "
+            f"constants from baseline.yaml before calling engine.evaluate_design()."
+        ) from exc
 
     # --- Link dimensions ---
     w_rod   = float(design['width_l'])
     t_rod   = float(design['thickness_l'])
     w_crank = float(design['width_r'])
     t_crank = float(design['thickness_r'])
-    D_pA    = float(design['pin_diameter_A'])
     D_pB    = float(design['pin_diameter_B'])
     D_pC    = float(design['pin_diameter_C'])
 
-    # --- Corrected endurance limits (Section 10) ---
-    S_e_rod   = _endurance_limit_rect(w_rod,   t_rod,   S_ut, S_prime_e, z_a)
-    S_e_crank = _endurance_limit_rect(w_crank, t_crank, S_ut, S_prime_e, z_a)
-    # For pins: use smallest pin diameter — most conservative k_b (size factor)
-    d_pin_min = min(D_pA, D_pB, D_pC)
-    S_e_pin   = _endurance_limit_pin(d_pin_min, S_ut, S_prime_e, z_a)
+    # --- Corrected fatigue strengths (Mott Ch. 5) ---
+    S_n_prime_rod   = _sn_prime_rect(w_rod,   t_rod,   Sn, C_sur, C_st, C_R, C_m, C_f)
+    S_n_prime_crank = _sn_prime_rect(w_crank, t_crank, Sn, C_sur, C_st, C_R, C_m, C_f)
+    # For lug pins B and C: use the smaller diameter — shaft A excluded (separate Mott 12-24 check)
+    d_pin_min = min(D_pB, D_pC)
+    S_n_prime_pin   = _sn_prime_pin(d_pin_min, Sn, C_sur, C_st, C_R, C_m, C_f)
 
     # --- Convert histories to numpy arrays ---
     arr_sig_rod   = np.asarray(sigma_rod_history,   dtype=float)
@@ -436,15 +419,15 @@ def evaluate(
     # --- Per-component fatigue (Sections 9, 12, 13) ---
     rod   = _component_fatigue(
         arr_sig_rod,   arr_tau_rod,
-        S_e_rod,   S_ut, S_y, sigma_f_prime, n_rpm, total_cycles, N_anchor,
+        S_n_prime_rod,   S_ut, S_y, n_rpm, total_cycles, basquin_A, basquin_b,
     )
     crank = _component_fatigue(
         arr_sig_crank, arr_tau_crank,
-        S_e_crank, S_ut, S_y, sigma_f_prime, n_rpm, total_cycles, N_anchor,
+        S_n_prime_crank, S_ut, S_y, n_rpm, total_cycles, basquin_A, basquin_b,
     )
     pin   = _component_fatigue(
         arr_sig_pin,   arr_tau_pin,
-        S_e_pin,   S_ut, S_y, sigma_f_prime, n_rpm, total_cycles, N_anchor,
+        S_n_prime_pin,   S_ut, S_y, n_rpm, total_cycles, basquin_A, basquin_b,
     )
 
     # --- Build output dict with component suffixes ---

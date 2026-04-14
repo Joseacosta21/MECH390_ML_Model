@@ -76,7 +76,7 @@ STAGE1_COLUMNS = ["r", "l", "e", "ROM", "QRR", "theta_min", "theta_max"]
 STAGE2_GEO_COLUMNS = [
     "width_r", "width_l",
     "thickness_r", "thickness_l",
-    "pin_diameter_A", "pin_diameter_B", "pin_diameter_C",
+    "d_shaft_A", "pin_diameter_B", "pin_diameter_C",
 ]
 
 MASS_PROP_COLUMNS = [
