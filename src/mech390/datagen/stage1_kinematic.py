@@ -5,6 +5,7 @@ Stage 1: 2D kinematic synthesis and filtering.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
@@ -26,29 +27,18 @@ _CONSTRAINT_FUNCS = {
 }
 
 
-import math
-
-
+# rounds a value to the nearest manufacturing step size
 def _round_to_res(value: float, resolution_m: float) -> float:
-    """
-    Round *value* to the nearest multiple of *resolution_m*.
-    When resolution_m <= 0 no rounding is applied.
-
-    Uses Python's built-in round() to eliminate binary floating-point
-    representation noise (e.g. 0.103 * 1/0.001 arithmetic can yield
-    0.10300000000000001 without this step).
-    """
     if resolution_m <= 0.0:
         return value
-    # Determine how many decimal places resolution_m represents.
-    # e.g. 0.001 m -> 3 decimal places, 0.0001 m -> 4 decimal places.
+    # e.g. 0.001 m -> 3 decimal places, 0.0001 m -> 4 decimal places
     decimal_places = max(0, round(-math.log10(resolution_m)))
     raw = round(value / resolution_m) * resolution_m
     return round(raw, decimal_places)
 
 
+# converts a range definition (dict or list) into a plain (min, max) tuple
 def _range_bounds(range_def: Any, name: str) -> Tuple[float, float]:
-    """Normalize config range definitions to (min, max)."""
     if isinstance(range_def, dict) and "min" in range_def and "max" in range_def:
         return float(range_def["min"]), float(range_def["max"])
     if isinstance(range_def, (list, tuple)) and len(range_def) == 2:
@@ -56,6 +46,7 @@ def _range_bounds(range_def: Any, name: str) -> Tuple[float, float]:
     raise ValueError(f"Range for '{name}' must be {{min,max}} or [min,max]. Got: {range_def!r}")
 
 
+# returns the valid range of e values for a given l that still allow the target ROM
 def _feasible_e_interval_for_l(
     l: float,
     e_min: float,
@@ -63,12 +54,6 @@ def _feasible_e_interval_for_l(
     target_rom: float,
     strict_eps: float,
 ) -> Optional[Tuple[float, float]]:
-    """
-    Feasible e-interval for a fixed l under:
-      1) |e| < l
-      2) target_rom < 2*sqrt(l^2 - e^2)
-      3) e_min <= e <= e_max
-    """
     if target_rom >= 2.0 * l:
         return None
 
@@ -84,6 +69,7 @@ def _feasible_e_interval_for_l(
     return low, high
 
 
+# samples (l, e) pairs, keeping only ones where a valid r could exist
 def _generate_constrained_stage1_candidates(
     method: str,
     n_samples: int,
@@ -95,12 +81,6 @@ def _generate_constrained_stage1_candidates(
     strict_eps: float,
     resolution_m: float = 0.0,
 ) -> List[Dict[str, float]]:
-    """Generate (l, e) candidates that satisfy pre-feasibility constraints.
-
-    When *resolution_m* > 0 both *l* and *e* are rounded to the nearest
-    multiple of *resolution_m* immediately after sampling, so that all
-    downstream maths operates on manufacturable values.
-    """
     l_min_cfg, l_max_cfg = _range_bounds(l_range, "l")
     e_min_cfg, e_max_cfg = _range_bounds(e_range, "e")
 
@@ -173,8 +153,8 @@ def _generate_constrained_stage1_candidates(
     return candidates
 
 
+# turns constraint strings into compiled code objects so they run fast inside the sampling loop
 def _compile_constraints(constraints: List[str]) -> List[Tuple[str, Any]]:
-    """Compile sampling constraints for repeated evaluation."""
     compiled: List[Tuple[str, Any]] = []
     for expr in constraints:
         if not isinstance(expr, str):
@@ -183,8 +163,8 @@ def _compile_constraints(constraints: List[str]) -> List[Tuple[str, Any]]:
     return compiled
 
 
+# builds the variable dict that constraint expressions can read (r, l, e, ROM target)
 def _build_constraint_context(r: float, l: float, e: float, target_rom: float) -> Dict[str, float]:
-    """Provide standard variables available to sampling constraint expressions."""
     return {
         "r": r,
         "l": l,
@@ -194,8 +174,8 @@ def _build_constraint_context(r: float, l: float, e: float, target_rom: float) -
     }
 
 
+# returns True if all constraint expressions pass for the given geometry
 def _constraints_satisfied(compiled_constraints: List[Tuple[str, Any]], context: Dict[str, float]) -> bool:
-    """Evaluate all compiled constraint expressions against a context."""
     if not compiled_constraints:
         return True
 
@@ -211,6 +191,7 @@ def _constraints_satisfied(compiled_constraints: List[Tuple[str, Any]], context:
     return True
 
 
+# solves analytically for the crank radius r that gives exactly the target ROM at fixed l and e
 def solve_for_r_given_rom(
     l: float,
     e: float,
@@ -219,10 +200,7 @@ def solve_for_r_given_rom(
     r_max: float,
     rom_tolerance: float = 1e-5,
 ) -> Optional[float]:
-    """
-    Analytically solve crank radius r for target ROM at fixed l and e.
-    Returns None when infeasible.
-    """
+    """Returns None when no feasible r exists."""
     s_val = target_rom
 
     if abs(e) >= l:
@@ -275,6 +253,7 @@ def solve_for_r_given_rom(
     return r_sol
 
 
+# checks a single (l, e) candidate: solves for r, rounds it, verifies ROM and QRR, returns result dict or None
 def _accept_candidate(
     l: float,
     e: float,
@@ -287,20 +266,14 @@ def _accept_candidate(
     compiled_constraints: List[Tuple[str, Any]],
     resolution_m: float = 0.0,
 ) -> Optional[Dict[str, Any]]:
-    """Run full Stage-1 acceptance checks for one (l, e) candidate.
-
-    When *resolution_m* > 0 the solved *r* is rounded to the nearest
-    multiple of *resolution_m* before ROM / QRR are evaluated, so that
-    maths is performed on the rounded (manufacturable) geometry.
-    """
     r_sol = solve_for_r_given_rom(l, e, target_rom, r_min, r_max, rom_tolerance=rom_tolerance)
     if r_sol is None:
         return None
 
-    # --- Round r to manufacturing resolution ---
+    # round r to manufacturing resolution
     r_sol = _round_to_res(r_sol, resolution_m)
 
-    # Re-check bounds after rounding (rounding can push r outside [r_min, r_max]).
+    # rounding can push r out of bounds, check again
     if not (r_min <= r_sol <= r_max):
         return None
 
@@ -336,14 +309,7 @@ def iter_valid_2d_mechanisms(
     config: Dict[str, Any],
     n_attempts: int = 100000,
 ) -> Iterator[Dict[str, Any]]:
-    """
-    Generate valid Stage-1 2D mechanisms from config.
-
-    ``n_samples`` in the config is the **target number of valid designs**
-    to yield.  The function generates candidate (l, e) pairs in batches
-    until that many valid designs have been produced or the total draw
-    budget (max_attempts) is exhausted.
-    """
+    """Yields valid Stage-1 2D mechanism dicts until n_samples is reached or the draw budget runs out."""
     geo_ranges = config.get("geometry")
     op_settings = config.get("operating")
     samp_config = config.get("sampling")
@@ -370,22 +336,19 @@ def iter_valid_2d_mechanisms(
     constraint_exprs = samp_config.get("constraints", []) or []
     compiled_constraints = _compile_constraints(constraint_exprs)
 
-    # Manufacturing resolution (0 = no rounding)
+    # manufacturing resolution (0 = no rounding)
     mfg = config.get("manufacturing") or {}
     resolution_m = float(mfg.get("resolution_mm", 0.0)) * 1e-3
 
     strict_eps = max(1e-12, rom_tolerance * 1e-3)
 
-    # Generate candidates in batches.  Each batch is large enough to
-    # statistically produce the remaining valid designs, with a minimum
-    # floor so we don't spin with tiny batches.
+    # generate candidates in batches: 10x what we still need, minimum 64
     total_draws = 0
     n_valid_yielded = 0
     batch_seed_offset = 0
 
     while n_valid_yielded < target_n_valid:
         remaining = target_n_valid - n_valid_yielded
-        # Heuristic batch size: 10× what we still need, at least 64.
         batch_size = max(64, remaining * 10)
 
         if total_draws + batch_size > n_attempts:
@@ -393,7 +356,7 @@ def iter_valid_2d_mechanisms(
 
         if batch_size <= 0:
             logger.warning(
-                "Stage 1: draw budget exhausted after %d draws — "
+                "Stage 1: draw budget exhausted after %d draws - "
                 "%d / %d valid designs produced.",
                 total_draws, n_valid_yielded, target_n_valid,
             )
@@ -433,12 +396,9 @@ def iter_valid_2d_mechanisms(
                 yield accepted
 
 
+# runs iter_valid_2d_mechanisms and returns all results as a list
 def generate_valid_2d_mechanisms(
     config: Dict[str, Any],
     n_attempts: int = 100000,
 ) -> List[Dict[str, Any]]:
-    """
-    Generate valid Stage-1 2D mechanisms from config.
-    Returns a list for compatibility with existing callers.
-    """
     return list(iter_valid_2d_mechanisms(config, n_attempts=n_attempts))

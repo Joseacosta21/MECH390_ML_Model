@@ -1,77 +1,55 @@
 """
-Export test-set inputs + ground truth + model predictions for the report appendix.
+export_test_appendix.py - exports test-set predictions for the report appendix.
 
-Produces two files in the output directory:
-  appendix_test_predictions.csv  — one row per test design, columns:
-      [INPUT_FEATURES] | pass_fail (ground truth) | pass_fail_pred | pass_prob |
-      [REGRESSION_TARGETS ground truth] | [REGRESSION_TARGETS predicted]
-  appendix_test_predictions_rounded.csv — same, values rounded to 4 sig figs
+Writes two files to data/:
+  appendix_test_predictions.csv
+  appendix_test_predictions_rounded.csv  (4 sig figs)
 
-Usage
------
-    .venv/bin/python scripts/export_test_appendix.py \
-        --test     data/splits/test.csv \
-        --ckpt     data/models/surrogate_best.pt \
-        --scaler   data/models/scaler.pkl \
-        --stats    data/models/target_stats.json \
-        --out-dir  data/
+Usage: python scripts/export_test_appendix.py
 """
 
-import argparse
 import sys
 from pathlib import Path
 
 import pandas as pd
 
-# Make src/ importable when run from repo root
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from mech390.ml import features as F
 from mech390.ml.infer import SurrogatePredictor
 
+_ROOT    = Path(__file__).resolve().parent.parent
+_TEST    = _ROOT / "data" / "splits" / "test.csv"
+_CKPT    = _ROOT / "data" / "models" / "surrogate_best.pt"
+_SCALER  = _ROOT / "data" / "models" / "scaler.pkl"
+_STATS   = _ROOT / "data" / "models" / "target_stats.json"
+_OUT_DIR = _ROOT / "data"
+
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Export test-set appendix table")
-    parser.add_argument("--test",    default="data/splits/test.csv")
-    parser.add_argument("--ckpt",    default="data/models/surrogate_best.pt")
-    parser.add_argument("--scaler",  default="data/models/scaler.pkl")
-    parser.add_argument("--stats",   default="data/models/target_stats.json")
-    parser.add_argument("--out-dir", default="data/")
-    args = parser.parse_args()
+    _OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # ------------------------------------------------------------------
-    # Load test split
-    # ------------------------------------------------------------------
-    test_df = pd.read_csv(args.test)
+    test_df = pd.read_csv(_TEST)
     print(f"Loaded test set: {len(test_df)} rows")
 
-    # Derive slenderness features (needed by predictor)
+    # add derived input features
     test_df = F.derive_input_features(test_df)
 
-    # ------------------------------------------------------------------
-    # Run surrogate on all test rows
-    # ------------------------------------------------------------------
     predictor = SurrogatePredictor(
-        checkpoint=args.ckpt,
-        scaler_path=args.scaler,
-        stats_path=args.stats,
+        checkpoint=str(_CKPT),
+        scaler_path=str(_SCALER),
+        stats_path=str(_STATS),
     )
-    preds_df = predictor.predict(test_df)  # DataFrame with pass_prob, pass_fail_pred, + reg targets
+    preds_df = predictor.predict(test_df)  # gives pass_fail_pred, pass_prob, and regression targets
 
-    # ------------------------------------------------------------------
-    # Build appendix table
-    # ------------------------------------------------------------------
-    # Ground-truth regression targets (may be missing for fail rows — keep NaN)
+    # ground truth regression targets (NaN for fail rows)
     gt_reg_cols = []
     for t in F.REGRESSION_TARGETS:
         col = t + "_gt"
         test_df[col] = test_df[t] if t in test_df.columns else float("nan")
         gt_reg_cols.append(col)
 
-    # Predicted regression targets
+    # predicted regression targets
     pred_reg_cols = [t + "_pred" for t in F.REGRESSION_TARGETS]
     preds_renamed = preds_df[F.REGRESSION_TARGETS].copy()
     preds_renamed.columns = pred_reg_cols
@@ -87,28 +65,20 @@ def main() -> None:
         axis=1,
     )
 
-    # ------------------------------------------------------------------
-    # Write full-precision CSV
-    # ------------------------------------------------------------------
-    full_path = out_dir / "appendix_test_predictions.csv"
+    full_path = _OUT_DIR / "appendix_test_predictions.csv"
     appendix.to_csv(full_path, index=False)
-    print(f"Written: {full_path}  ({len(appendix)} rows × {len(appendix.columns)} cols)")
+    print(f"Written: {full_path}  ({len(appendix)} rows x {len(appendix.columns)} cols)")
 
-    # ------------------------------------------------------------------
-    # Write rounded CSV (4 significant figures — cleaner for print table)
-    # ------------------------------------------------------------------
+    # round to 4 sig figs for a cleaner print table
     rounded = appendix.copy()
     float_cols = rounded.select_dtypes(include="float").columns
     rounded[float_cols] = rounded[float_cols].apply(
         lambda col: col.map(lambda v: float(f"{v:.4g}") if pd.notna(v) else v)
     )
-    rounded_path = out_dir / "appendix_test_predictions_rounded.csv"
+    rounded_path = _OUT_DIR / "appendix_test_predictions_rounded.csv"
     rounded.to_csv(rounded_path, index=False)
     print(f"Written: {rounded_path}  (rounded to 4 sig figs)")
 
-    # ------------------------------------------------------------------
-    # Summary stats
-    # ------------------------------------------------------------------
     n = len(appendix)
     n_pass_gt   = int(appendix[F.CLASSIFICATION_TARGET].sum())
     n_pass_pred = int(appendix["pass_fail_pred"].sum())

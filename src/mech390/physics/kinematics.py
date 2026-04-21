@@ -1,12 +1,9 @@
 """
-Kinematics module for Offset Crank-Slider Mechanism.
-Implements deterministic, physics-based calculations for position, velocity, acceleration,
-and derived metrics (ROM, QRR).
+Kinematics for the offset crank-slider mechanism.
 
-All position/velocity/acceleration functions return np.ndarray of shape (2,)
-representing [x, y] components.
-
-Ref: instructions.md (Authoritative)
+Computes position, velocity, and acceleration for all bodies,
+plus derived metrics (ROM, QRR). All position/velocity/acceleration
+functions return np.ndarray of shape (2,) for [x, y] components.
 """
 
 import numpy as np
@@ -20,9 +17,7 @@ def _slider_radicand(theta: float, r: float, l: float, e: float) -> float:
 
 def _slider_sqrt_term(theta: float, r: float, l: float, e: float) -> tuple[float, float]:
     """
-    Return `(u, sqrt_term)` where:
-      u = r*sin(theta) + e
-      sqrt_term = sqrt(l^2 - u^2)
+    Returns (u, sqrt_term) where u = r*sin(theta) + e, sqrt_term = sqrt(l^2 - u^2).
     Raises ValueError for invalid geometry.
     """
     u = float(r * np.sin(theta) + e)
@@ -35,52 +30,19 @@ def _slider_sqrt_term(theta: float, r: float, l: float, e: float) -> tuple[float
     return u, float(np.sqrt(radicand))
 
 
-# ---------------------------------------------------------------------------
-# Slider C — constrained to x-axis (y = 0 always)
-# ---------------------------------------------------------------------------
+### Slider C - constrained to x-axis (y = 0 always)
 
+# x_C(theta) = r*cos(theta) + sqrt(l^2 - (r*sin(theta) + e)^2), y_C = 0
 def slider_position(theta: float, r: float, l: float, e: float) -> np.ndarray:
-    """
-    Calculates the slider position vector pos_C(theta).
-
-    Equation:
-        x_C(theta) = r * cos(theta) + sqrt(l^2 - (r * sin(theta) + e)^2)
-        y_C        = 0  (slider constrained to x-axis)
-
-    Args:
-        theta (float): Crank angle in radians.
-        r (float): Crank radius.
-        l (float): Connecting rod length.
-        e (float): Offset (vertical distance from crank pivot to slider line).
-
-    Returns:
-        np.ndarray: Slider position vector [x_C, 0.0].
-
-    Raises:
-        ValueError: If geometry constraints are violated (term under sqrt < 0).
-    """
+    """Returns slider position vector [x_C, 0.0]."""
     _, sq_term = _slider_sqrt_term(theta, r, l, e)
     x_C = r * np.cos(theta) + sq_term
     return np.array([x_C, 0.0])
 
 
+# v_C = dx/dt = (dx/dtheta) * omega, y-component always 0
 def slider_velocity(theta: float, omega: float, r: float, l: float, e: float) -> np.ndarray:
-    """
-    Calculates the slider linear velocity vector vel_C.
-
-    Derivation: v_C = dx/dt = (dx/dtheta) * omega
-                y-component is always 0 (slider constrained to x-axis).
-
-    Args:
-        theta (float): Crank angle in radians.
-        omega (float): Angular velocity in rad/s.
-        r (float): Crank radius.
-        l (float): Connecting rod length.
-        e (float): Offset.
-
-    Returns:
-        np.ndarray: Slider velocity vector [v_Cx, 0.0].
-    """
+    """Returns slider velocity vector [v_Cx, 0.0]."""
     u, sq_term = _slider_sqrt_term(theta, r, l, e)
     # dx/dtheta = -r*sin(theta) - (r*cos(theta)*(r*sin(theta) + e)) / sqrt(...)
     dx_dtheta = -r * np.sin(theta) - (r * np.cos(theta) * u) / sq_term
@@ -88,24 +50,9 @@ def slider_velocity(theta: float, omega: float, r: float, l: float, e: float) ->
     return np.array([v_Cx, 0.0])
 
 
+# a_C = d(v_C)/dtheta * omega, assumes constant omega (alpha = 0)
 def slider_acceleration(theta: float, omega: float, r: float, l: float, e: float) -> np.ndarray:
-    """
-    Calculates the slider linear acceleration vector acc_C.
-    Assumes constant omega (alpha = 0).
-
-    a_C = d(v_C)/dt = d(v_C)/dtheta * omega
-    y-component is always 0 (slider constrained to x-axis).
-
-    Args:
-        theta (float): Crank angle in radians.
-        omega (float): Angular velocity in rad/s.
-        r (float): Crank radius.
-        l (float): Connecting rod length.
-        e (float): Offset.
-
-    Returns:
-        np.ndarray: Slider acceleration vector [a_Cx, 0.0].
-    """
+    """Returns slider acceleration vector [a_Cx, 0.0]."""
     # Let u = r*sin(theta) + e
     # Let S = sqrt(l^2 - u^2)
     # x = r*cos(theta) + S
@@ -137,94 +84,32 @@ def slider_acceleration(theta: float, omega: float, r: float, l: float, e: float
     return np.array([a_Cx, 0.0])
 
 
-# ---------------------------------------------------------------------------
-# Crank pin B — moves in a full circle (genuine 2D motion)
-# ---------------------------------------------------------------------------
+### Crank pin B - moves in a full circle (genuine 2D motion)
 
 def crank_pin_position(theta: float, r: float) -> np.ndarray:
-    """
-    Calculates the crank pin B position vector.
-
-    The crank pin moves in a full circle of radius r about the origin.
-
-    Args:
-        theta (float): Crank angle in radians.
-        r (float): Crank radius.
-
-    Returns:
-        np.ndarray: Crank pin position vector [r*cos(theta), r*sin(theta)].
-    """
+    """Returns crank pin B position [r*cos(theta), r*sin(theta)]."""
     return np.array([r * np.cos(theta), r * np.sin(theta)])
 
 
 def crank_pin_velocity(theta: float, omega: float, r: float) -> np.ndarray:
-    """
-    Calculates the crank pin B velocity vector.
-
-    Derivation: d/dt [r*cos(theta), r*sin(theta)] with dtheta/dt = omega.
-
-    Args:
-        theta (float): Crank angle in radians.
-        omega (float): Angular velocity in rad/s.
-        r (float): Crank radius.
-
-    Returns:
-        np.ndarray: Crank pin velocity vector [-r*omega*sin(theta), r*omega*cos(theta)].
-    """
+    """Returns crank pin B velocity [-r*omega*sin(theta), r*omega*cos(theta)]."""
     return np.array([-r * omega * np.sin(theta), r * omega * np.cos(theta)])
 
 
+# centripetal only - constant omega assumed (alpha = 0)
 def crank_pin_acceleration(theta: float, omega: float, r: float) -> np.ndarray:
-    """
-    Calculates the crank pin B acceleration vector.
-    Assumes constant omega (alpha = 0), so only centripetal acceleration.
-
-    Derivation: d/dt [-r*omega*sin(theta), r*omega*cos(theta)]
-
-    Args:
-        theta (float): Crank angle in radians.
-        omega (float): Angular velocity in rad/s.
-        r (float): Crank radius.
-
-    Returns:
-        np.ndarray: Crank pin acceleration vector [-r*omega^2*cos(theta), -r*omega^2*sin(theta)].
-    """
+    """Returns crank pin B acceleration [-r*omega^2*cos(theta), -r*omega^2*sin(theta)]."""
     return np.array([-r * omega**2 * np.cos(theta), -r * omega**2 * np.sin(theta)])
 
 
-# ---------------------------------------------------------------------------
-# Dead-center detection and metrics
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Helper relations derived from vector formulation
-# ---------------------------------------------------------------------------
+### Dead-center detection and metrics
 
 def rod_angle(theta: float, r: float, l: float, e: float) -> float:
     """
-    Compute the connecting-rod orientation phi measured from the positive
-    x-axis (i.e. the angle between link BC and the slider axis).
+    Connecting-rod orientation phi from the positive x-axis (angle between link BC and slider axis).
 
-    The user derivation gives
-
-        sin(phi) = -(e + r*sin(theta)) / l
-
-    which enforces the slider constraint y_C = 0.  We choose the branch with
-    *positive* cosine (open configuration) by constructing the angle with
-    ``atan2(sin, cos_positive)``.
-
-    Args:
-        theta: crank angle [rad]
-        r: crank radius
-        l: rod length
-        e: offset (positive upward)
-
-    Returns:
-        phi: rod angle [rad]
-
-    Raises:
-        ValueError: if the argument of arcsin exceeds unity (invalid geometry).
+    sin(phi) = -(e + r*sin(theta)) / l enforces the slider constraint y_C = 0.
+    Returns the branch with positive cosine (open configuration).
     """
     sin_phi = -(e + r * np.sin(theta)) / l
     if abs(sin_phi) > 1.0:
@@ -238,26 +123,13 @@ def rod_angle(theta: float, r: float, l: float, e: float) -> float:
 
 def rod_angular_velocity(theta: float, omega: float, r: float, l: float, e: float) -> float:
     """
-    Relative angular speed of the connecting rod about pin B.
+    Angular speed of the connecting rod about pin B.
 
-    Derived from the condition that the slider moves purely horizontally
-    (V_{Cy}=0) and using
-
-        V_B = [-r * omega * sin(theta), r * omega * cos(theta)]
-
-    so
-
+    From V_{Cy}=0 and V_B = [-r*omega*sin(theta), r*omega*cos(theta)]:
         omega_cb = -V_By / (l * cos(phi))
-
-    Args:
-        theta: crank angle [rad]
-        omega: crank angular velocity [rad/s] (CW positive)
-        r, l, e: geometry
-    Returns:
-        omega_{C/B} [rad/s]
     """
     phi = rod_angle(theta, r, l, e)
-    V_By = omega * r * np.cos(theta)  # from V_B j-component
+    V_By = omega * r * np.cos(theta)
     return -V_By / (l * np.cos(phi))
 
 
@@ -272,17 +144,10 @@ def rod_angular_acceleration(
     """
     Angular acceleration of the connecting rod about pin B.
 
-    Using the slider constraint (a_{Cy}=0) and the previously derived
-    expressions, we obtain
-
+    From a_{Cy}=0:
         alpha_cb = (omega_cb^2 * l * sin(phi) - a_By) / (l * cos(phi))
-
-    where
-        a_By = alpha2 * r * cos(theta) - omega^2 * r * sin(theta)
-
-    ``alpha2`` is the crank angular acceleration (default zero for constant
-    speed).  The sign conventions follow the CW positive orientation used
-    elsewhere in the code.
+    where a_By = alpha2 * r * cos(theta) - omega^2 * r * sin(theta).
+    alpha2 is the crank angular acceleration (0 at constant speed).
     """
     phi = rod_angle(theta, r, l, e)
     omega_cb = rod_angular_velocity(theta, omega, r, l, e)
@@ -294,21 +159,13 @@ def rod_angular_acceleration(
 def get_dead_center_angles(r: float, l: float, e: float):
     """
     Finds the two crank angles where slider velocity is zero (dead centers).
-    Uses robust root-finding as required by specs.
 
-    Velocity is zero when dx/dtheta is zero.
-    Equation: -r*sin(theta) - (r*cos(theta)*(r*sin(theta)+e)) / sqrt(...) = 0
-
-    Arguments:
-        r, l, e: geometric parameters
-
-    Returns:
-        np.ndarray of two sorted roots in [0, 2pi), or empty array when
-        dead centers cannot be found.
+    Returns a sorted np.ndarray of two roots in [0, 2pi), or an empty array
+    when dead centers cannot be found.
     """
 
     def velocity_proxy(theta):
-        # Returns scalar dx/dtheta for robust root finding.
+        # returns scalar dx/dtheta for root finding
         sin_t = np.sin(theta)
         cos_t = np.cos(theta)
         u = r * sin_t + e
@@ -317,11 +174,11 @@ def get_dead_center_angles(r: float, l: float, e: float):
         sq_term = np.sqrt(l**2 - u**2)
         return -r * sin_t - (r * cos_t * u) / sq_term
 
-    # Sweep [0, 2pi) at 1-degree resolution to bracket roots
+    # sweep [0, 2pi) at 1-degree resolution to bracket roots
     thetas = np.linspace(0, 2*np.pi, 360)
     vals = np.array([velocity_proxy(th) for th in thetas], dtype=float)
 
-    # Identify sign changes (bracket roots)
+    # identify sign changes (bracket roots)
     roots = []
     for i in range(len(vals) - 1):
         if np.isnan(vals[i]) or np.isnan(vals[i+1]):
@@ -333,7 +190,7 @@ def get_dead_center_angles(r: float, l: float, e: float):
             except Exception:
                 pass
 
-    # Normalize to [0, 2pi)
+    # normalize to [0, 2pi)
     roots = np.unique(np.array(roots) % (2*np.pi))
 
     if len(roots) != 2:
@@ -346,13 +203,8 @@ def calculate_metrics(r: float, l: float, e: float) -> dict:
     """
     Computes ROM and QRR for the given geometry.
 
-    Args:
-        r, l, e: Geometry.
-
-    Returns:
-        dict: {'ROM': float, 'QRR': float, 'theta_retracted': float,
-               'theta_extended': float, 'x_min': float, 'x_max': float}
-              or {'valid': False, 'reason': str} if geometry invalid.
+    Returns {'ROM', 'QRR', 'theta_retracted', 'theta_extended', 'x_min', 'x_max'}
+    or {'valid': False, 'reason': str} if the geometry is invalid.
     """
 
     # 1. Validate basic existence
@@ -369,11 +221,11 @@ def calculate_metrics(r: float, l: float, e: float) -> dict:
 
     theta1, theta2 = roots[0], roots[1]
 
-    # Calculate positions — index [0] to extract x-component for ROM calculation
+    # calculate positions - index [0] to extract x-component for ROM calculation
     x1 = slider_position(theta1, r, l, e)[0]
     x2 = slider_position(theta2, r, l, e)[0]
 
-    # Determine Extended (max x) and Retracted (min x)
+    # determine extended (max x) and retracted (min x)
     if x1 > x2:
         x_max, theta_max = x1, theta1
         x_min, theta_min = x2, theta2

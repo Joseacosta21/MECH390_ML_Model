@@ -1,10 +1,8 @@
 """
-Physics engine for Offset Crank-Slider Mechanism.
+Physics engine for the offset crank-slider mechanism.
 Orchestrates the 15-degree sweep, evaluates kinematics/dynamics/stresses
 at each crank angle, collects per-component stress histories, then runs
 buckling and fatigue analyses over the full cycle.
-
-Ref: instructions.md (Authoritative), Mother Doc v7
 """
 
 import logging
@@ -29,53 +27,15 @@ from mech390.physics._utils import get_or_warn
 
 def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Evaluates a 3D mechanism design over one full crank revolution (15° steps).
+    Runs the full physics sweep for one design over 360 degrees at 15-degree steps.
 
-    At each crank angle the engine:
-      1. Evaluates kinematics (position, velocity, acceleration for all bodies)
-      2. Solves dynamics (joint reaction forces via Newton-Euler)
-      3. Injects per-step values into a design copy:
-           design['theta'] = theta           (current angle, rad)
-           design['tau_A'] = forces['tau_A'] (motor torque at this step, N*m)
-      4. Calls stresses.evaluate() → per-component stress dict
-      5. Appends all per-step outputs to their respective history lists
-      6. Computes signed F_r,rod,B independently (for buckling history)
+    At each crank angle: evaluates kinematics, solves dynamics, runs stress analysis.
+    After the sweep: runs buckling and fatigue analyses over the full cycle.
 
-    After the sweep:
-      - Calls buckling.evaluate(F_r_rod_history, design)
-      - Calls fatigue.evaluate(per-component histories, design)
-
-    Args:
-        design (dict): Must contain at least:
-            'r', 'l', 'e'                          — 2D kinematics (m)
-            'omega'                                 — angular velocity (rad/s)
-            'mass_crank', 'mass_rod', 'mass_slider' — link masses (kg)
-            'width_r', 'thickness_r'               — crank cross-section (m)
-            'width_l', 'thickness_l'               — rod cross-section (m)
-            'd_shaft_A'                            — motor shaft diameter (m)
-            'pin_diameter_B', 'pin_diameter_C'     — lug pin diameters (m)
-            'I_area_crank_yy/zz', 'I_area_rod_yy/zz' — area moments (m^4)
-            'I_mass_crank_cg_z', 'I_mass_rod_cg_z'   — mass MOI (kg*m^2)
-            'E', 'S_ut', 'S_y', 'Sn',
-            'basquin_A', 'basquin_b', 'n_rpm', 'total_cycles'  — material / fatigue props
-
-    Returns:
-        dict with keys:
-            'sigma_max'          : float — peak overall normal stress [Pa]
-            'tau_max'            : float — peak overall shear stress [Pa]
-            'theta_sigma_max'    : float — crank angle at sigma_max [rad]
-            'theta_tau_max'      : float — crank angle at tau_max [rad]
-            'valid_physics'      : bool
-            'n_buck'             : float — buckling safety factor
-            'P_cr'               : float — Euler critical load (N)
-            'N_max_comp'         : float — max compressive axial force (N)
-            'buckling_passed'    : bool
-            'kinematics_history' : list of dicts, one per angle step
-            'dynamics_history'   : list of dicts, one per angle step
-            'stresses_history'   : list of dicts, one per angle step
-            'n_shaft'            : float — Mott 12-24 ASME-Elliptic shaft safety factor
-            'n_shaft_passed'     : bool
-            + all keys from fatigue.evaluate() (suffixed _rod, _crank, _pin)
+    design must contain 'r', 'l', 'e', 'omega', link masses and inertias,
+    cross-section dimensions, material properties (E, S_ut, S_y, Sn, Basquin
+    coefficients), and fatigue config (n_rpm, total_cycles).
+    Returns {'valid_physics': False} on any failure during the sweep.
     """
     _ctx = 'engine.evaluate_design'
     r      = design['r']
@@ -94,7 +54,7 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
     m_block        = get_or_warn(design, 'm_block',        0.0,  context=_ctx)
     sweep_step_deg = get_or_warn(design, 'sweep_step_deg', 15.0, context=_ctx)
 
-    # Sweep over one full revolution at the configured step size
+    # sweep over one full revolution at the configured step size
     thetas = np.deg2rad(np.arange(0, 360, float(sweep_step_deg)))
 
     sigma_max       = 0.0
@@ -102,12 +62,12 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
     theta_sigma_max = 0.0
     theta_tau_max   = 0.0
 
-    # Per-step output histories returned to the caller for CSV export
+    # per-step output histories returned to the caller for CSV export
     kinematics_history: List[Dict[str, Any]] = []
     dynamics_history:   List[Dict[str, Any]] = []
     stresses_history:   List[Dict[str, Any]] = []
 
-    # Per-component stress histories consumed by fatigue.evaluate()
+    # per-component stress histories consumed by fatigue.evaluate()
     sigma_rod_hist:   List[float] = []
     tau_rod_hist:     List[float] = []
     sigma_crank_hist: List[float] = []
@@ -115,10 +75,10 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
     sigma_pin_hist:   List[float] = []
     tau_pin_hist:     List[float] = []
 
-    # Signed F_r,rod,B history for buckling check (negative = compression)
+    # signed F_r,rod,B history for buckling check (negative = compression)
     F_r_rod_hist: List[float] = []
 
-    # Shaft A: |F_A| and |tau_A| histories for Mott 12-24 check
+    # shaft A |F_A| and |tau_A| histories for ASME-elliptic check
     F_A_mag_hist:  List[float] = []
     tau_A_abs_hist: List[float] = []
 
@@ -126,7 +86,7 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
         for theta in thetas:
             angle_deg = float(np.rad2deg(theta))
 
-            # --- Kinematics (all outputs captured) ---
+            # kinematics
             pos_C    = kinematics.slider_position(theta, r, l, e)
             vel_C    = kinematics.slider_velocity(theta, omega, r, l, e)
             acc_C    = kinematics.slider_acceleration(theta, omega, r, l, e)
@@ -153,7 +113,7 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
                 'alpha_cb':  float(alpha_cb),
             })
 
-            # --- Dynamics ---
+            # dynamics
             forces = dynamics.joint_reaction_forces(
                 theta, omega, r, l, e,
                 mass_crank, mass_rod, mass_slider,
@@ -181,12 +141,12 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
                 'tau_A':     float(forces['tau_A']),
             })
 
-            # --- Inject per-step values into a shallow design copy ---
+            # inject per-step values into a shallow design copy for stress evaluation
             step_design = design.copy()
             step_design['theta'] = float(theta)
             step_design['tau_A'] = float(forces['tau_A'])
 
-            # --- Stresses ---
+            # stresses
             stress_result = stresses.evaluate(step_design, F_A, F_B, F_C)
 
             sigma = stress_result['sigma']
@@ -204,7 +164,7 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
                 'tau':         tau,
             })
 
-            # --- Collect per-component histories for fatigue ---
+            # collect per-component histories for fatigue
             sigma_rod_hist.append(stress_result['sigma_rod'])
             tau_rod_hist.append(stress_result['tau_rod'])
             sigma_crank_hist.append(stress_result['sigma_crank'])
@@ -212,15 +172,15 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
             sigma_pin_hist.append(stress_result['sigma_pin'])
             tau_pin_hist.append(stress_result['tau_pin'])
 
-            # --- Signed F_r,rod,B for buckling (negative = compression) ---
+            # signed F_r,rod,B for buckling (negative = compression)
             F_r_rod_B = -F_B[0] * math.cos(phi) - F_B[1] * math.sin(phi)
             F_r_rod_hist.append(F_r_rod_B)
 
-            # --- Shaft A histories for Mott 12-24 check ---
+            # shaft A histories for ASME-elliptic check
             F_A_mag_hist.append(float(np.linalg.norm(F_A)))
             tau_A_abs_hist.append(abs(float(forces['tau_A'])))
 
-            # --- Track overall sweep maxima ---
+            # track overall sweep maxima
             if sigma > sigma_max:
                 sigma_max       = sigma
                 theta_sigma_max = float(theta)
@@ -235,8 +195,8 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
         )
         return {'valid_physics': False}
 
-    # --- Post-sweep: Motor torque, energy per revolution, peak joint forces,
-    #     and per-link peak normal stresses (used by generate.py for n_static) ---
+    # post-sweep: motor torque, energy per revolution, peak joint forces,
+    # and per-link peak normal stresses (used by generate.py for n_static)
     tau_A_arr   = np.array([s['tau_A'] for s in dynamics_history], dtype=float)
     delta_theta = 2.0 * np.pi / len(tau_A_arr)
 
@@ -257,13 +217,12 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
     sigma_crank_peak = float(np.max(np.abs([s['sigma_crank'] for s in stresses_history])))
     sigma_pin_peak   = float(np.max(np.abs([s['sigma_pin']   for s in stresses_history])))
 
-    # --- Post-sweep: Shaft A — Mott 12-24 ASME-Elliptic criterion ---
+    # shaft A ASME-elliptic safety factor
     # Press-fit connection; Kf = 1.0 (no stress concentration from keyway or spline).
     # Bending: fully reversed (M = |F_A| * L_bearing at each step).
-    # Torsion:  steady (T = |tau_A| at each step).
-    # ASME-Elliptic (Mott Eq. 12-24):
-    #   N_shaft = π·d³ / [16·√((2M/S'n)² + 3·(T/S_y)²)]
-    # where S'n = Marin-corrected finite-life fatigue strength for circular shaft (Mott Ch. 5).
+    # Torsion: steady (T = |tau_A| at each step).
+    # N_shaft = pi*d^3 / [16 * sqrt((2M/Sn_prime)^2 + 3*(T/S_y)^2)]
+    # where Sn_prime = Marin-corrected finite-life fatigue strength for circular shaft.
     d_shaft_A  = float(get_or_warn(design, 'd_shaft_A',  0.003, context=_ctx))
     L_bearing  = float(get_or_warn(design, 'L_bearing',  0.010, context=_ctx))
     n_shaft_min_val = float(get_or_warn(design, 'n_shaft_min', 2.0,  context=_ctx))
@@ -274,10 +233,10 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
     C_R_s      = float(get_or_warn(design, 'C_R',    0.81, context=_ctx))
     C_m_s      = float(get_or_warn(design, 'C_m',    1.0,  context=_ctx))
     C_f_s      = float(get_or_warn(design, 'C_f',    1.0,  context=_ctx))
-    # Corrected endurance limit — circular section (same Marin factors as links)
+    # corrected endurance limit - circular section (same Marin factors as links)
     C_s_shaft  = fatigue._C_s_size_pin(d_shaft_A)
     Sn_prime_shaft = Sn_shaft * C_sur_s * C_s_shaft * C_st_s * C_R_s * C_m_s * C_f_s
-    # Evaluate at every sweep step; governing = minimum N_shaft
+    # evaluate at every sweep step; governing = minimum N_shaft
     n_shaft = float('inf')
     for F_A_mag, tau_A_abs in zip(F_A_mag_hist, tau_A_abs_hist):
         M_s = F_A_mag * L_bearing
@@ -289,10 +248,10 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
                 n_shaft = N_s
     n_shaft_passed = (n_shaft >= n_shaft_min_val) if math.isfinite(n_shaft) else True
 
-    # --- Post-sweep: Buckling check (Section 14) ---
+    # buckling check
     buckling_result = buckling.evaluate(F_r_rod_hist, design)
 
-    # --- Post-sweep: Fatigue analysis (Sections 9-13) ---
+    # fatigue analysis
     fatigue_result = fatigue.evaluate(
         sigma_rod_hist,   tau_rod_hist,
         sigma_crank_hist, tau_crank_hist,
@@ -306,26 +265,26 @@ def evaluate_design(design: Dict[str, Any]) -> Dict[str, Any]:
         'theta_sigma_max':   theta_sigma_max,
         'theta_tau_max':     theta_tau_max,
         'valid_physics':     True,
-        # Shaft A (Mott 12-24)
+        # shaft A
         'n_shaft':           n_shaft,
         'n_shaft_passed':    n_shaft_passed,
-        # Buckling
+        # buckling
         'n_buck':            buckling_result['n_buck'],
         'P_cr':              buckling_result['P_cr'],
         'N_max_comp':        buckling_result['N_max_comp'],
         'buckling_passed':   buckling_result['passed'],
-        # Motor torque & energy per revolution
+        # motor torque & energy per revolution
         'tau_A_max':         tau_A_max,
         'E_rev':             E_rev,
-        # Peak joint forces (for bearing selection)
+        # peak joint forces (for bearing selection)
         'F_A_max':           F_A_max,
         'F_B_max':           F_B_max,
         'F_C_max':           F_C_max,
-        # Per-link peak normal stresses (generate.py divides by sigma_limit → n_static)
+        # per-link peak normal stresses
         'sigma_rod_peak':    sigma_rod_peak,
         'sigma_crank_peak':  sigma_crank_peak,
         'sigma_pin_peak':    sigma_pin_peak,
-        # Per-angle histories for CSV export
+        # per-angle histories for CSV export
         'kinematics_history': kinematics_history,
         'dynamics_history':   dynamics_history,
         'stresses_history':   stresses_history,
