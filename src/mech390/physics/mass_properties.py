@@ -1,10 +1,8 @@
 """
-Mass properties module for Offset Crank-Slider Mechanism.
+Mass properties for the offset crank-slider mechanism.
 
-Provides:
-  - Kinematic COG helpers (existing API)
-  - Modular geometry-to-mass/inertia helpers for Stage 2 design rows
-  - Design-level mass-properties aggregator for later pipeline wiring
+Computes masses, mass moments of inertia, area moments of inertia,
+and kinematic center-of-gravity positions for all links.
 """
 
 from __future__ import annotations
@@ -35,11 +33,8 @@ class MassPropertiesResult:
     I_area_slider_zz: float
 
     def to_dict(self) -> Dict[str, float]:
-        """
-        Convert to dict while preserving legacy slider area-moment aliases.
-        """
+        """Returns all mass properties as a dict, including legacy slider area-moment key aliases."""
         out = asdict(self)
-        # Backward-compatible aliases used by existing tests/callers.
         out["I_area_slider_x"] = self.I_area_slider_yy
         out["I_area_slider_y"] = self.I_area_slider_zz
         return out
@@ -92,11 +87,9 @@ def _rect_prism_mass_and_moi_cg_z(
 
 def _fixed_rho_from_config(config: Mapping[str, Any]) -> float:
     """
-    Extract fixed density from config.material.rho.
+    Extracts fixed density from config.material.rho.
 
-    Allowed:
-      - scalar number
-      - {'min': x, 'max': x} with min == max
+    Accepts a scalar number or a {'min': x, 'max': x} dict where min == max.
     """
     material = config.get("material")
     if not isinstance(material, Mapping):
@@ -138,9 +131,7 @@ def link_plan_area_net(
     d_left: float,
     d_right: float,
 ) -> float:
-    """
-    Net plan area of a rectangular link with two circular through-holes.
-    """
+    """Net plan area of a rectangular link with two circular through-holes."""
     w = _require_positive("width", width)
     length = link_body_length(center_distance, d_left, d_right)
     area_net = length * w - (_circle_area(d_left) + _circle_area(d_right))
@@ -186,9 +177,7 @@ def link_mass_moi_cg_z(
     d_right: float,
     rho: float,
 ) -> float:
-    """
-    Net mass moment of inertia about link CG z-axis using composite subtraction.
-    """
+    """Net mass moment of inertia about link CG z-axis using composite subtraction."""
     c = _require_positive("center_distance", center_distance)
     w = _require_positive("width", width)
     t = _require_positive("thickness", thickness)
@@ -207,8 +196,8 @@ def link_mass_moi_cg_z(
 
     # Exact offsets of each pin hole center relative to the rectangular body CG.
     # Link body length L = c + 0.5*dl + 0.5*dr; CG is at L/2 from the left end.
-    # Left hole at 0.5*dl from left end  → offset = 0.5*dl - L/2 = -0.5*c + 0.25*(dl - dr)
-    # Right hole at c + 0.5*dl from left → offset = c + 0.5*dl - L/2 =  0.5*c + 0.25*(dl - dr)
+    # Left hole at 0.5*dl from left end  -> offset = 0.5*dl - L/2 = -0.5*c + 0.25*(dl - dr)
+    # Right hole at c + 0.5*dl from left -> offset = c + 0.5*dl - L/2 =  0.5*c + 0.25*(dl - dr)
     x_left = -0.5 * c + 0.25 * (dl - dr)
     x_right = 0.5 * c + 0.25 * (dl - dr)
 
@@ -228,11 +217,9 @@ def link_mass_moi_cg_z(
 
 def link_area_moments_gross(width: float, thickness: float) -> Dict[str, float]:
     """
-    Gross rectangular area moments for link cross-section (holes ignored by decision).
+    Gross rectangular area moments for link cross-section (holes ignored).
 
-    Axis convention requested:
-      - Izz axis parallel to thickness
-      - Iyy axis parallel to width
+    Iyy is about the axis parallel to thickness; Izz is about the axis parallel to width.
     """
     w = _require_positive("width", width)
     t = _require_positive("thickness", thickness)
@@ -271,10 +258,7 @@ def slider_mass_moi_cg_z(
     d_c: float,
     rho: float,
 ) -> float:
-    """
-    Net slider mass moment of inertia about CG z-axis.
-    Hole subtraction assumes centered hole in inertia term for now.
-    """
+    """Net slider mass moment of inertia about CG z-axis."""
     l = _require_positive("length", length)
     w = _require_positive("width", width)
     h = _require_positive("height", height)
@@ -297,9 +281,8 @@ def slider_mass_moi_cg_z(
 
 def slider_area_moments_gross(width: float, height: float) -> Dict[str, float]:
     """
-    Gross rectangular area moments for slider section (holes ignored by decision).
-
-    Returns standardized keys (Iyy, Izz) and legacy aliases (I_area_x, I_area_y).
+    Gross rectangular area moments for slider section (holes ignored).
+    Returns Iyy, Izz, and legacy aliases I_area_x / I_area_y.
     """
     w = _require_positive("width", width)
     h = _require_positive("height", height)
@@ -364,9 +347,7 @@ def compute_design_mass_properties(
     design: Mapping[str, Any],
     config: Mapping[str, Any],
 ) -> Dict[str, float]:
-    """
-    Compute all mass-properties outputs for one sampled design and global config.
-    """
+    """Compute all mass-properties outputs for one sampled design and global config."""
     rho = _fixed_rho_from_config(config)
 
     link_inputs = _load_design_link_inputs(design)
@@ -441,36 +422,23 @@ def compute_design_mass_properties(
     ).to_dict()
 
 
-# ---------------------------------------------------------------------------
-# Existing kinematic COG helpers (kept unchanged for compatibility)
-# ---------------------------------------------------------------------------
+### Kinematic COG helpers
 
+# crank COG approximated at midpoint between origin O and crank pin B
 def crank_cog(theta: float, r: float) -> np.ndarray:
-    """
-    Computes the center of gravity of the crank (link 2).
-
-    The crank rotates about fixed pivot O (origin). Its COG is approximated
-    at the midpoint between O and the crank pin B.
-    """
+    """Returns crank center of gravity (midpoint between O and pin B)."""
     return 0.5 * kinematics.crank_pin_position(theta, r)
 
 
+# rod COG approximated at midpoint between pin B and pin C
 def rod_cog(theta: float, r: float, l: float, e: float) -> np.ndarray:
-    """
-    Computes the center of gravity of the connecting rod (link 3).
-
-    Approximated at the midpoint between the crank pin B and slider pin C.
-    """
+    """Returns rod center of gravity (midpoint between pin B and pin C)."""
     pos_B = kinematics.crank_pin_position(theta, r)
-    pos_C = kinematics.slider_position(theta, r, l, e)  # [x_C, 0.0]
+    pos_C = kinematics.slider_position(theta, r, l, e)
     return 0.5 * (pos_B + pos_C)
 
 
+# slider COG coincides with pin C since slider is constrained to x-axis
 def slider_cog(theta: float, r: float, l: float, e: float) -> np.ndarray:
-    """
-    Computes the center of gravity of the slider (link 4).
-
-    The slider is constrained to the x-axis, so its COG coincides with
-    the slider pin C.
-    """
+    """Returns slider center of gravity (coincides with pin C)."""
     return kinematics.slider_position(theta, r, l, e)
