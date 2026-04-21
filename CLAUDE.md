@@ -1,4 +1,4 @@
-# CLAUDE.md — MECH390 ML Model Project
+# CLAUDE.md - MECH390 ML Model Project
 
 Read automatically by Claude Code each session.
 Defines subagents and rules for using them.
@@ -8,12 +8,12 @@ Defines subagents and rules for using them.
 > For project background, see [README.md](README.md). For physics equations, see [The_Mother_Doc_v7.md](The_Mother_Doc_v7.md). For code contracts, see [instructions.md](instructions.md).
 
 **Key files:**
-- `src/mech390/physics/` — kinematics, dynamics, mass properties, engine
-- `src/mech390/datagen/` — stage1, stage2, sampling, generate
-- `src/mech390/config.py` — config loading and validation
-- `configs/generate/baseline.yaml` — main configuration
-- `scripts/` — preview and generation entry points
-- `instructions.md` — authoritative physics derivations (read before answering physics questions)
+- `src/mech390/physics/` - kinematics, dynamics, mass properties, engine
+- `src/mech390/datagen/` - stage1, stage2, sampling, generate
+- `src/mech390/config.py` - config loading and validation
+- `configs/generate/baseline.yaml` - main configuration
+- `scripts/` - preview and generation entry points
+- `instructions.md` - authoritative physics derivations (read before answering physics questions)
 
 ---
 
@@ -21,15 +21,13 @@ Defines subagents and rules for using them.
 
 **Invoke at least one subagent for any substantive task.**
 
-Substantive = anything beyond simple factual question — editing code, running scripts, debugging, explaining physics, reviewing data, planning changes.
+Substantive = anything beyond simple factual question: editing code, running scripts, debugging, explaining physics, reviewing data, planning changes.
 
 Pick subagent(s) based on request. Run multiple agents in parallel when independent.
 
 ---
 
 ## Available Subagents
-
----
 
 ### 1. Physics Validator
 
@@ -101,16 +99,16 @@ Pick subagent(s) based on request. Run multiple agents in parallel when independ
    - Zero values in columns that should always be positive
 3. Checks physical plausibility of every column:
    - `r`, `l`, `e` within bounds in `configs/generate/baseline.yaml`
-   - `ROM` within ±`ROM_tolerance` of target (0.25 m)
+   - `ROM` within +-`ROM_tolerance` of target (0.25 m)
    - `QRR` within [1.5, 2.5]
    - `mass_crank`, `mass_rod`, `mass_slider` > 0; `total_mass` == sum of parts
    - `I_mass_*` > 0
    - `sigma_max`, `tau_max` >= 0
-   - `volume_envelope` > 0 (order of magnitude: 10⁻⁴ to 10⁻² m³)
+   - `volume_envelope` > 0 (order of magnitude: 10^-4 to 10^-2 m^3)
    - `tau_A_max` > 0; `F_A_max`, `F_B_max`, `F_C_max` > 0
    - `n_static_rod`, `n_static_crank`, `n_static_pin` >= 1.0 in `passed_configs.csv`
 4. Checks dataset statistics:
-   - Row count matches expected `n_samples × n_variants_per_2d`
+   - Row count matches expected `n_samples x n_variants_per_2d`
    - No duplicate rows (exact or near-duplicate geometry)
    - Column count matches expected schema (85 columns in passed/failed_configs.csv as of latest run)
 5. Reports: total rows, pass/fail count per check, suspicious rows with index
@@ -119,7 +117,7 @@ Pick subagent(s) based on request. Run multiple agents in parallel when independ
 
 ### 4. ML Readiness Inspector
 
-**Purpose:** Evaluates dataset suitability for ML training — class balance, feature distributions, potential leakage, dataset size.
+**Purpose:** Evaluates dataset suitability for ML training: class balance, feature distributions, potential leakage, dataset size.
 
 **Trigger when:**
 - "is the dataset ready for training?", "can I train now?", "check the data for ML", "is there enough data?", or similar
@@ -148,82 +146,79 @@ Pick subagent(s) based on request. Run multiple agents in parallel when independ
 
 ### 5. ML Data Scientist
 
-**Purpose:** Designs, critiques, improves the neural network — architecture, loss function, training loop, hyperparameter search, evaluation metrics. Focuses on maximizing surrogate accuracy given dataset constraints (currently 200 rows).
+**Purpose:** Designs, critiques, improves the neural network: architecture, loss function, training loop, hyperparameter search, evaluation metrics.
 
 **Trigger when:**
 - "how can we improve the model?", "is the NN architecture good?", "should we change the loss function?", "why is n_buck prediction bad?", or similar
-- Val F1 or val R² drops after code change
+- Val F1 or val R^2 drops after code change
 - New dataset generated and retraining needed
 - Optimizer produces physically invalid candidates (may indicate poor surrogate quality)
 - Before committing changes to any file in `src/mech390/ml/`
 
 **Actions:**
 1. Reads full ML stack:
-   - `src/mech390/ml/models.py` — architecture (shared trunk, clf + reg heads)
-   - `src/mech390/ml/train.py` — loss function, Optuna sweep, early stopping logic
-   - `src/mech390/ml/features.py` — input features, regression targets, normalization
-   - `src/mech390/ml/optimize.py` — how surrogate outputs used in optimization
-   - `configs/train/surrogate.yaml` — hyperparameter search space
+   - `src/mech390/ml/models.py` - architecture (shared trunk, clf + reg heads)
+   - `src/mech390/ml/train.py` - loss function, Optuna sweep, early stopping logic
+   - `src/mech390/ml/features.py` - input features, regression targets, normalization
+   - `src/mech390/ml/optimize.py` - how surrogate outputs used in optimization
+   - `configs/train/surrogate.yaml` - hyperparameter search space
 2. Audits loss function:
    - Are `w_bce` and `w_mse` weights balanced for the task?
-   - Is Optuna objective (`val_f1`) the right metric, or should it be composite of F1 + mean R²?
+   - Is Optuna objective (`val_f1`) the right metric, or should it be composite of F1 + mean R^2?
    - Are regression targets normalized correctly before MSE computation?
-3. Audits architecture for data regime (≤200 rows):
+3. Audits architecture for data regime:
    - Is model capacity appropriate (risk of overfitting)?
-   - Is dropout tuned for small datasets?
+   - Is dropout tuned for the dataset size?
    - Would separate trunks per head improve regression accuracy?
 4. Flags unreliable regression targets:
-   - `n_buck` at 200 rows — report val R² and recommend whether to keep or drop
-   - Any target with val R² < 0.7 flagged as unreliable for optimizer use
+   - `n_buck` - report val R^2 and recommend whether to keep or drop
+   - Any target with val R^2 < 0.7 flagged as unreliable for optimizer use
 5. Recommends concrete, actionable improvements:
    - Loss function changes (e.g., add per-head weights, switch to Huber loss)
    - Architecture changes (e.g., deeper trunk, separate heads, residual connections)
    - Training changes (e.g., learning rate schedule, gradient clipping)
    - Feature engineering (e.g., derived ratios like `l/r`, `e/l`, slenderness `l/t`)
-6. Reports: current val F1, per-target val R², recommended changes ranked by expected impact, which changes require retraining vs config-only
+6. Reports: current val F1, per-target val R^2, recommended changes ranked by expected impact, which changes require retraining vs config-only
 
 ---
 
 ## Known Issues (Physics)
 
-**Sign convention at Pin A (deferred):** `stresses.py:139–140` defines `F_r,crank,A` and `F_t,crank,A` with opposite signs to Mother Doc Eqs. 2.5–2.6. No numerical impact while `abs()` wrapping used throughout crank stress path.
+**Sign convention at Pin A (deferred):** `_crank_frame_forces` in `stresses.py` defines `F_r,crank,A` and `F_t,crank,A` with opposite signs to the Mother Doc derivation. No numerical impact while `abs()` wrapping is used throughout the crank stress path.
 
-**OOP bending model (settled):** `M_eta = F_r_B · i_offset` is **constant along rod and crank** — no `(1 − ξ/L)` decay. System fully planar (Newton-Euler 2D), no ζ pin reactions → no lateral force couple → no moment gradient. Any code or doc showing linear decay is wrong.
+**OOP bending model (settled):** `M_eta = F_r_B * i_offset` is constant along rod and crank - no `(1 - xi/L)` decay. System fully planar (Newton-Euler 2D), no zeta pin reactions, no lateral force couple, no moment gradient. Any code or doc showing linear decay is wrong.
 
-**Gravity bending removed from rod and crank:** self-weight enters F_A, F_B, F_C via Newton-Euler. Separate UDL gravity bending double-counted it — removed from both `_rod_stresses` and `_crank_stresses`.
+**Gravity bending removed from rod and crank:** self-weight enters F_A, F_B, F_C via Newton-Euler. Separate UDL gravity bending double-counted it - removed from both `_rod_stresses` and `_crank_stresses`.
 
-## Optimizer Constraints Implemented
+---
 
-Surrogate optimizer (`src/mech390/ml/optimize.py`) enforces four hard analytical constraints as penalty terms in score function, in addition to surrogate pass_prob gate:
+## Optimizer Constraints
 
-1. **Net-section feasibility** — `width - D_pin > delta + 2×min_wall` for all 4 pin pairs.
-   Prevents near-zero net sections that produce ~TPa stresses.
-2. **Kinematic feasibility** — `l > r + e` (rod must bridge pin B to pin C at all crank angles).
-   Without this, optimizer could find r+e > l, crashing physics engine at θ≈75°.
-3. **Euler buckling** — analytical `P_cr = π²EI/l²` check; penalises `n_buck < 3.0`.
-   Surrogate's n_buck predictions unreliable at 200 rows; this enforces it analytically.
-4. **ROM constraint** — `|kinematics.calculate_metrics(r,l,e)['ROM'] - 0.25| > ROM_tolerance` penalised via `penalty_rom_scale=200`. All training data satisfies ROM=250mm±0.5mm; without this, optimizer picks arbitrary r → wrong stroke.
-5. **QRR constraint** — `QRR ∉ [1.5, 2.5]` penalised via `penalty_qrr_scale=20`. Same reasoning — training data entirely within this band. Both ROM and QRR computed via `kinematics.calculate_metrics()` (same formula as Stage 1).
+Surrogate optimizer (`src/mech390/ml/optimize.py`) enforces five analytical constraints as penalty terms, in addition to the surrogate pass_prob gate:
 
-Added after physics validation (`scripts/validate_candidate.py`) revealed earlier optimizer outputs were kinematically infeasible or failed buckling. ROM/QRR added after optimizer was found to ignore these kinematic specs entirely.
+1. **Net-section feasibility** - `width - D_pin > delta + 2*min_wall` for all 4 pin pairs. Prevents near-zero net sections that produce ~TPa stresses.
+2. **Kinematic feasibility** - `l > r + e` (rod must bridge pin B to pin C at all crank angles). Without this, optimizer can find r+e > l, crashing the physics engine near theta=75 deg.
+3. **Euler buckling** - analytical `P_cr = pi^2*E*I/l^2` check; penalises `n_buck < 3.0`. Surrogate n_buck predictions are unreliable; this enforces it analytically.
+4. **ROM constraint** - `|ROM - 0.25| > ROM_tolerance` penalised via `penalty_rom_scale=200`. Training data satisfies ROM=250 mm +- 0.5 mm; without this, optimizer picks arbitrary r and gets wrong stroke.
+5. **QRR constraint** - `QRR outside [1.5, 2.5]` penalised via `penalty_qrr_scale=20`. Training data entirely within this band. Both ROM and QRR computed via `kinematics.calculate_metrics()`.
+
+---
 
 ## Current ML Model State
 
-**Dataset:** last run — 10,000 rows, 7,526 pass (75.3%) / 2,474 fail (24.7%). Size will change; see `baseline.yaml`. Retraining after dataset change requires only re-running `scripts/train_model.py` — no code changes needed.
-
 **Best trained surrogate** (`data/models/surrogate_best.pt`):
-- Val F1: **0.9713** | Architecture: `[256, 128, 64]` | Dropout: 0.299 | LR: 9.17e-3 | Batch: 128
-- 50 Optuna trials × 300 epochs max, patience=25
+- Val F1: **0.9704** | Architecture: `[512, 256, 128]` | Dropout: 0.269 | LR: 8.26e-3 | Batch: 256
+- 50 Optuna trials x 300 epochs max, patience=25
 
-**Architecture decisions already implemented:**
-- Early stopping saves on `val_f1 > best_val_f1` (not `val_loss`) — ensures best-classified epoch saved, not best-regressed
+**Architecture decisions:**
+- Early stopping saves on `val_f1 > best_val_f1` (not `val_loss`) - ensures best-classified epoch saved, not best-regressed
 - `input_dim` and `n_reg_targets` derived from `len(F.INPUT_FEATURES)` / `len(F.REGRESSION_TARGETS)` in `train.py`; no hardcoded integers in training path
 - `infer.py` asserts `ckpt['hparams']['n_reg_targets'] == len(F.REGRESSION_TARGETS)` at load time to catch stale checkpoints
 
-**Optimizer OOD penalty (ML-P2 — implemented):** Regression predictions outside training range by more than `ood_tolerance` (default 10%) penalised as `weight × ood_excess × ood_penalty_scale`. Prediction 3× training max produces deduction that completely dominates score, eliminating that candidate. Both parameters configurable in `configs/optimize/search.yaml` under `constraints`. Previously, OOD predictions silently clamped to [0, 1] — root cause of surrogate 0.97 → physics 0.48 gap on Rank 1 candidates.
+**OOD penalty (implemented):** Regression predictions outside training range by more than `ood_tolerance` (default 10%) penalised as `weight x ood_excess x ood_penalty_scale`. Both parameters configurable in `configs/optimize/search.yaml` under `constraints`. Previously, OOD predictions were silently clamped to [0, 1] - root cause of surrogate 0.97 -> physics 0.48 gap on Rank 1 candidates.
 
-**Next recommended ML improvement (ML-P8 — Split regression training):**
-Train classification head on all data (pass + fail); train regression heads only on passing rows. Regression targets (mass, torque, safety factors) physically meaningful only for passing designs; training on fail configs adds noise to regression gradient. pass_prob gate in optimizer still requires classifier to have seen both classes.
+**Next recommended improvement - Split regression training:**
+Train classification head on all data (pass + fail); train regression heads only on passing rows. Regression targets (mass, torque, safety factors) are physically meaningful only for passing designs; training on fail configs adds noise to regression gradient. pass_prob gate in optimizer still requires classifier to have seen both classes.
 
 ---
 
@@ -234,16 +229,16 @@ Train classification head on all data (pass + fail); train regression heads only
 .venv/bin/python scripts/run_pipeline.py
 # flags: --skip-datagen, --skip-training, --top N, --seed INT, --log-level LEVEL
 ```
-Runs 4 steps in sequence: data generation → surrogate training → optimization → manufacturing report.
+Runs 4 steps in sequence: data generation -> surrogate training -> optimization -> manufacturing report.
 
-**Step 4 — Manufacturing report** (`scripts/summarize_results.py`):
+**Step 4 - Manufacturing report** (`scripts/summarize_results.py`):
 Reads `data/results/candidates.json` (written by `optimize_design.py --out-json`), runs full physics validation on top-N candidates, prints ROM/QRR/FoS/mass/verdict for each. Standalone:
 ```bash
 .venv/bin/python scripts/summarize_results.py --top 3
 ```
 
-**Physics validation script** (`scripts/validate_candidate.py`):
-Runs specific geometry dict through full physics engine without Stage 1. Use to verify any optimizer candidate before committing to manufacture.
+**Physics validation** (`scripts/validate_candidate.py`):
+Runs a specific geometry dict through the full physics engine without Stage 1. Use to verify any optimizer candidate before committing to manufacture.
 ```bash
 .venv/bin/python scripts/validate_candidate.py --config configs/generate/baseline.yaml
 ```
@@ -253,14 +248,13 @@ Edit `CANDIDATE` at top of script to test different geometries.
 
 ## Quick Reference for Teammates
 
-No Python or mechanics knowledge needed.
-Describe what you want in plain English. Examples:
+No Python or mechanics knowledge needed. Describe what you want in plain English.
 
 **Run full pipeline:**
 ```bash
 .venv/bin/python scripts/run_pipeline.py
 ```
-Runs all 4 steps: data gen → train → optimize → manufacturing report (top 3 candidates with physics validation).
+Runs all 4 steps: data gen -> train -> optimize -> manufacturing report (top 3 candidates with physics validation).
 
 **Run only data generation:**
 ```bash
