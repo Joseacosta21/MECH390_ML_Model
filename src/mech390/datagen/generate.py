@@ -1,24 +1,18 @@
 """
-Data Generation Orchestrator.
+Data generation orchestrator.
 
-Runs the full pipeline (Stage 1 → Stage 2 → mass properties → physics engine)
-and returns a DatasetResult containing seven DataFrames ready for CSV export:
+Runs the full pipeline (Stage 1 -> Stage 2 -> mass properties -> physics engine)
+and returns a DatasetResult containing seven DataFrames:
 
-  kinematics_df  — one row per (design, crank angle): positions, velocities, accelerations
-  dynamics_df    — one row per (design, crank angle): joint forces, torque
-  stresses_df    — one row per (design, crank angle): per-component normal + shear stresses
-  fatigue_df     — one row per design: Goodman / Miner fatigue metrics per component
-  buckling_df    — one row per design: Euler buckling metrics for connecting rod
-  passed_df      — one row per passing design: geometry + summary metrics + check columns
-  failed_df      — one row per failing design: geometry + summary metrics + check columns
+  kinematics_df  - one row per (design, crank angle): positions, velocities, accelerations
+  dynamics_df    - one row per (design, crank angle): joint forces, torque
+  stresses_df    - one row per (design, crank angle): per-component normal + shear stresses
+  fatigue_df     - one row per design: Goodman / Miner fatigue metrics per component
+  buckling_df    - one row per design: Euler buckling metrics for connecting rod
+  passed_df      - one row per passing design: geometry + summary metrics + check columns
+  failed_df      - one row per failing design: geometry + summary metrics + check columns
 
 Designs that fail physics evaluation (valid_physics=False) are silently dropped.
-Pass/fail is determined by ALL of the following checks passing:
-  - Static stress:   utilization <= limits.utilization_max
-  - Static FoS:      n_static_* >= limits.n_static_min
-  - Buckling:        n_buck >= limits.n_buck_min
-  - Fatigue Goodman: n_rod, n_crank, n_pin >= configured minima
-  - Fatigue Miner:   D_rod, D_crank, D_pin < configured maxima (when total_cycles is set)
 """
 
 import logging
@@ -43,9 +37,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Geometry columns included in every CSV row (self-contained)
-# ---------------------------------------------------------------------------
+# geometry columns included in every CSV row
 _GEOM_COLS = [
     'r', 'l', 'e',
     'ROM', 'QRR', 'omega',
@@ -57,8 +49,9 @@ _GEOM_COLS = [
 
 
 class DatasetResult:
-    """Container for all pipeline outputs."""
+    """Holds all seven pipeline output DataFrames and a summary dict."""
 
+    # stores each DataFrame and the summary as instance attributes
     def __init__(
         self,
         kinematics_df: pd.DataFrame,
@@ -79,9 +72,9 @@ class DatasetResult:
         self.failed_df     = failed_df
         self.summary       = summary
 
-    # Convenience aliases kept for any legacy callers
     @property
     def all_cases(self) -> pd.DataFrame:
+        # returns all designs (pass + fail) sorted by design_id
         parts = [df for df in (self.passed_df, self.failed_df) if not df.empty]
         if not parts:
             return pd.DataFrame()
@@ -89,26 +82,19 @@ class DatasetResult:
 
     @property
     def pass_cases(self) -> pd.DataFrame:
+        # returns only the passing designs
         return self.passed_df
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+### Helpers
 
+# pulls only the geometry columns out of a design dict
 def _extract_geom(design: Dict[str, Any]) -> Dict[str, Any]:
-    """Return only the geometry columns from a design dict."""
     return {col: design.get(col) for col in _GEOM_COLS}
 
 
+# converts a config value to a float; if it's a range dict, uses the min end
 def _as_scalar(name: str, value: Any, default: float) -> float:
-    """
-    Coerce a config value to a scalar float.
-
-    Supports:
-      - scalar numeric values
-      - range dicts {'min': x, 'max': y} (uses conservative min)
-    """
     if value is None:
         return float(default)
     if isinstance(value, dict):
@@ -123,35 +109,19 @@ def _as_scalar(name: str, value: Any, default: float) -> float:
     return float(value)
 
 
+# prepends design_id and geometry columns to each row in a history list
 def _prefix_rows(
     history: List[Dict[str, Any]],
     prefix:  Dict[str, Any],
 ) -> List[Dict[str, Any]]:
-    """Prepend prefix columns (design_id + geometry) to each history row."""
     return [{**prefix, **row} for row in history]
 
 
+# removes designs whose rounded geometry is identical to an earlier one, filters all DataFrames to match
 def _drop_duplicate_designs(
     dfs: List[pd.DataFrame],
     per_design_df: pd.DataFrame,
 ) -> tuple:
-    """
-    Remove designs whose rounded geometry is identical to an earlier design.
-
-    Uses the per-design DataFrame (one row per design_id) to find duplicates
-    based on the geometry columns, then filters all DataFrames to the surviving
-    design_ids. The first occurrence of each unique geometry is kept.
-
-    Args:
-        dfs:            All seven DataFrames to filter, in order.
-        per_design_df:  One of the per-design DFs (e.g. fatigue_df) used to
-                        identify duplicates. Must contain 'design_id' and
-                        all _GEOM_COLS that are present.
-
-    Returns:
-        Tuple of filtered DataFrames (same order as input dfs) and the
-        number of duplicate designs removed.
-    """
     if per_design_df.empty:
         return tuple(dfs), 0
 
@@ -173,6 +143,7 @@ def _drop_duplicate_designs(
     return tuple(filtered), n_removed
 
 
+# assembles the pipeline summary dict from counts and timing
 def _build_summary(
     n_stage1:   int,
     n_stage2:   int,
@@ -196,41 +167,28 @@ def _build_summary(
     }
 
 
-# ---------------------------------------------------------------------------
-# Public interface
-# ---------------------------------------------------------------------------
+### Public interface
 
 def generate_dataset(
-    config: Dict[str, Any], 
+    config: Dict[str, Any],
     seed: Optional[int] = None,
     out_dir: Optional[Any] = None,
     chunk_size: int = 10000
 ) -> DatasetResult:
-    """
-    Run the full pipeline and return a DatasetResult with all seven DataFrames.
-    If out_dir is provided, writes CSV chunks on the fly to prevent RAM exhaustion.
+    """Runs the full pipeline and returns a DatasetResult with all seven DataFrames.
 
-    Args:
-        config:     Configuration dictionary (loaded from YAML via load_config).
-        seed:       Random seed (overrides config.random_seed if provided).
-        out_dir:    Path to output directory. If set, streams to CSV.
-        chunk_size: Number of evaluated designs to accumulate before writing to disk.
-
-    Returns:
-        DatasetResult
+    If out_dir is set, streams results to CSV on disk to avoid RAM exhaustion.
     """
     start_time = time.time()
 
     run_seed = seed if seed is not None else config.get('random_seed', 42)
     np.random.seed(run_seed)
 
-    # -------------------------------------------------------------------------
-    # Stage 1 — 2D kinematic synthesis
-    # -------------------------------------------------------------------------
-    logger.info("Stage 1: kinematic synthesis …")
+    # Stage 1 - 2D kinematic synthesis
+    logger.info("Stage 1: kinematic synthesis ...")
     valid_2d = stage1_kinematic.generate_valid_2d_mechanisms(config)
     n_stage1 = len(valid_2d)
-    logger.info("Stage 1 complete — %d valid 2D mechanisms.", n_stage1)
+    logger.info("Stage 1 complete - %d valid 2D mechanisms.", n_stage1)
 
     if n_stage1 == 0:
         logger.warning("No valid 2D mechanisms. Aborting.")
@@ -238,9 +196,7 @@ def generate_dataset(
         return DatasetResult(empty, empty, empty, empty, empty, empty, empty,
                              {'error': 'No valid 2D mechanisms'})
 
-    # -------------------------------------------------------------------------
-    # Operating / limit parameters (read once from config)
-    # -------------------------------------------------------------------------
+    # operating / limit parameters (read once from config)
     _ctx       = 'generate.generate_dataset'
     operating  = config.get('operating', {})
     limits_cfg = config.get('limits', {})
@@ -260,13 +216,13 @@ def generate_dataset(
     n_fatigue_default = float(get_or_warn(limits_cfg, 'n_fatigue_min', 1.0, context=_ctx))
     d_miner_max = float(get_or_warn(limits_cfg, 'D_miner_max', 1.0, context=_ctx))
 
-    # Static stress limits derived from S_y (Von Mises for shear yield: S_sy = 0.577 * S_y).
+    # static stress limits: tau yield = 0.577 * S_y (Von Mises)
     sigma_yield_material = float(get_or_warn(material, 'S_y', 345e6, context=_ctx))
     tau_yield_material   = 0.577 * sigma_yield_material
     sigma_limit = sigma_yield_material / safety_factor
     tau_limit   = tau_yield_material   / safety_factor
 
-    # Material props injected into every design dict before physics eval
+    # material props injected into every design dict before physics eval
     _mat = {
         'E':             float(get_or_warn(material, 'E',             73.1e9, context=_ctx)),
         'S_ut':          float(get_or_warn(material, 'S_ut',          483e6,  context=_ctx)),
@@ -274,7 +230,7 @@ def generate_dataset(
         'Sn':            float(get_or_warn(material, 'Sn',  133e6, context=_ctx)),
     }
 
-    # Stress-analysis constants injected into every design dict
+    # stress-analysis constants injected into every design dict
     _sa = {
         'delta':            float(get_or_warn(sa_cfg, 'diametral_clearance_m', 1e-4, context=_ctx)),
         'Kt_lug':           float(get_or_warn(sa_cfg, 'Kt_lug',           2.34,   context=_ctx)),
@@ -289,7 +245,7 @@ def generate_dataset(
         'C_R':              float(get_or_warn(sa_cfg, 'C_R',             0.81,   context=_ctx)),
         'C_f':              float(get_or_warn(sa_cfg, 'C_f',             1.0,    context=_ctx)),
         'C_m':              float(get_or_warn(sa_cfg, 'C_m',             1.0,    context=_ctx)),
-        # Crank angular acceleration — 0.0 for constant RPM (per instructions.md)
+        # crank angular acceleration: 0.0 for constant RPM
         'alpha_r':          0.0,
     }
 
@@ -308,12 +264,10 @@ def generate_dataset(
         'n_shaft_min':     float(get_or_warn(limits_cfg, 'n_shaft_min', 2.0, context=_ctx)),
     }
 
-    # -------------------------------------------------------------------------
-    # Stage 2 — 3D embodiment → mass props → physics eval
-    # -------------------------------------------------------------------------
-    logger.info("Stage 2 + physics evaluation …")
+    # Stage 2 + physics evaluation
+    logger.info("Stage 2 + physics evaluation ...")
 
-    # Accumulator lists for the seven DataFrames
+    # accumulator lists for the seven DataFrames
     kin_rows:  List[Dict] = []
     dyn_rows:  List[Dict] = []
     str_rows:  List[Dict] = []
@@ -332,15 +286,18 @@ def generate_dataset(
     total_failed = 0
     files_written = set()
 
+    # converts a list of row dicts to a DataFrame (empty DataFrame if no rows)
     def _to_df(rows: List[Dict]) -> pd.DataFrame:
         return pd.DataFrame(rows) if rows else pd.DataFrame()
 
+    # flushes accumulated rows to CSV files and clears the accumulators
     def _write_chunk(dest_dir):
         nonlocal total_passed, total_failed
         from pathlib import Path
         dest = Path(dest_dir)
         dest.mkdir(parents=True, exist_ok=True)
 
+        # appends rows to a CSV, writing a header only on the first write
         def _write_df(rows, filename):
             if not rows:
                 return
@@ -357,10 +314,10 @@ def generate_dataset(
         _write_df(buck_rows, "buckling.csv")
         _write_df(pass_rows, "passed_configs.csv")
         _write_df(fail_rows, "failed_configs.csv")
-            
+
         total_passed += len(pass_rows)
         total_failed += len(fail_rows)
-        
+
         kin_rows.clear()
         dyn_rows.clear()
         str_rows.clear()
@@ -372,7 +329,7 @@ def generate_dataset(
     for design in stage2_embodiment.iter_expand_to_3d(valid_2d, config):
         n_stage2 += 1
 
-        # --- Compute mass properties ---
+        # compute mass properties
         design_eval = design.copy()
         design_eval['omega']   = omega
         design_eval['m_block'] = m_block
@@ -388,7 +345,7 @@ def generate_dataset(
                 n_dropped += 1
                 continue
 
-        # --- On the fly deduplication ---
+        # on-the-fly deduplication
         geom = _extract_geom(design_eval)
         geom_tuple = tuple(geom.get(c, 0.0) for c in _GEOM_COLS)
         if geom_tuple in seen_geoms:
@@ -396,45 +353,45 @@ def generate_dataset(
             continue
         seen_geoms.add(geom_tuple)
 
-        # --- Derived design metrics (geometry + mass, computed once) ---
+        # derived design metrics (geometry + mass, computed once)
         design_eval['total_mass'] = (
             design_eval.get('mass_crank',  0.0)
             + design_eval.get('mass_rod',   0.0)
             + design_eval.get('mass_slider', 0.0)
         )
         _slider_cfg = config.get('geometry', {}).get('slider', {})
-        _s_h = float(_slider_cfg.get('height', 0.02))   # slider block height (y) [m] — vertical extent
-        _s_w = float(_slider_cfg.get('width',  0.02))   # slider block width (z) [m]  — OOP thickness for Pin C bearing
-        _s_l = float(_slider_cfg.get('length', 0.02))   # slider block length (x) [m]
+        _s_h = float(_slider_cfg.get('height', 0.02))  # slider block height (y) [m]
+        _s_w = float(_slider_cfg.get('width',  0.02))  # slider block width (z) [m]
+        _s_l = float(_slider_cfg.get('length', 0.02))  # slider block length (x) [m]
         _r   = float(design_eval['r'])
         _l   = float(design_eval['l'])
         _e   = float(design_eval['e'])
         _tr  = float(design_eval.get('thickness_r',    0.0))
         _tl  = float(design_eval.get('thickness_l',    0.0))
-        _pA  = float(design_eval.get('d_shaft_A', 0.0))  # shaft A diameter
-        # Bounding-box dimensions — see instructions.md Section 3.4 for full derivation.
+        _pA  = float(design_eval.get('d_shaft_A', 0.0))
+        # bounding-box dimensions - see instructions.md Section 3.4 for full derivation
         #
-        # Assembly cross-section (z-axis, out-of-plane view from +z):
+        # assembly cross-section (z-axis, out-of-plane view from +z):
         #   R and L touch face-to-face at a shared contact plane (blue line).
         #   L and S share the same centreline (centred on the contact plane side of L).
         #   Right of contact plane: t_l/2 (half of L) + t_s/2 (half of S, centred on L)
         #   Left  of contact plane: max(t_r, (t_s - t_l)/2)
-        #     — t_r if the crank is thicker than the slider overhang; else slider overhang dominates
+        #     - t_r if the crank is thicker than the slider overhang; else slider overhang dominates
         _T = (_tl + _s_h) / 2.0 + max(_tr, (_s_h - _tl) / 2.0)
         #
-        # Vertical extent (y-axis): crank pivot A is at y=0; slider guide is e below A (y = -e).
+        # vertical extent (y-axis): crank pivot A is at y=0; slider guide is e below A (y = -e).
         #   Top:    crank pin B at y = +r
         #   Bottom: lower of crank pin at y = -r  OR  slider block bottom at y = -(e + s_h/2)
         _H = _r + max(_r, _e + _s_h / 2.0)
         #
-        # Horizontal extent (x-axis): crank pivot A at origin.
-        #   Left:  crank pin B at x = -r (θ = 180°)
-        #   Right: slider pin C at maximum extension x = sqrt((r+l)² - e²), plus half slider block
+        # horizontal extent (x-axis): crank pivot A at origin.
+        #   Left:  crank pin B at x = -r (theta = 180 deg)
+        #   Right: slider pin C at maximum extension x = sqrt((r+l)^2 - e^2), plus half slider block
         _L = _r + float(np.sqrt(max((_r + _l)**2 - _e**2, 0.0))) + _s_l / 2.0
         design_eval['volume_envelope'] = _T * _H * _L
-        design_eval['slider_height']  = _s_w   # slider OOP thickness (z, width in YAML) — needed by _pin_stresses bearing at C
+        design_eval['slider_height']  = _s_w  # slider OOP thickness (z, width in YAML) - needed by pin C bearing
 
-        # --- Inject material + stress-analysis constants ---
+        # inject material and stress-analysis constants
         design_eval.update(_mat)
         design_eval.update(_sa)
         design_eval['n_rpm']          = rpm
@@ -443,7 +400,7 @@ def generate_dataset(
             get_or_warn(operating, 'TotalCycles', 18720000, context=_ctx)
         )
 
-        # --- Physics evaluation ---
+        # physics evaluation
         if engine is None:
             n_dropped += 1
             continue
@@ -459,17 +416,17 @@ def generate_dataset(
             n_dropped += 1
             continue
 
-        # --- Assign design_id and build geometry prefix ---
+        # assign design_id and build geometry prefix
         design_id += 1
         geom = _extract_geom(design_eval)
         prefix_geom = {'design_id': design_id, **geom}
 
-        # --- Per-angle rows (kinematics / dynamics / stresses) ---
+        # per-angle rows (kinematics / dynamics / stresses)
         kin_rows.extend(_prefix_rows(metrics['kinematics_history'], prefix_geom))
         dyn_rows.extend(_prefix_rows(metrics['dynamics_history'],   prefix_geom))
         str_rows.extend(_prefix_rows(metrics['stresses_history'],   prefix_geom))
 
-        # --- Fatigue row (per-design) ---
+        # fatigue row (per-design)
         fat_row: Dict[str, Any] = {'design_id': design_id, **geom}
         for comp in ('rod', 'crank', 'pin'):
             for key in ('sigma_max', 'sigma_min', 'sigma_m', 'sigma_a',
@@ -479,8 +436,8 @@ def generate_dataset(
                 fat_row[f'{key}_{comp}'] = metrics.get(f'{key}_{comp}')
         fat_rows.append(fat_row)
 
-        # --- Buckling row (per-design) ---
-        # I_min_r = min(w·t³, t·w³) / 12  — always the weaker axis (matches buckling.py).
+        # buckling row (per-design)
+        # I_min_r = min(w*t^3, t*w^3) / 12, weaker axis
         w_rod = float(design_eval.get('width_l', 0.0))
         t_rod = float(design_eval.get('thickness_l', 0.0))
         buck_rows.append({
@@ -493,7 +450,7 @@ def generate_dataset(
             'buckling_passed': metrics.get('buckling_passed'),
         })
 
-        # --- Checks + pass/fail ---
+        # checks and pass/fail label
         checks = compute_checks(metrics, sigma_limit, tau_limit, check_limits)
 
         config_row: Dict[str, Any] = {
@@ -502,7 +459,7 @@ def generate_dataset(
             **checks,
         }
 
-        # --- Additional ML features (not part of pass/fail logic) ---
+        # additional ML features (not part of pass/fail logic)
         config_row['total_mass']      = design_eval.get('total_mass')
         config_row['volume_envelope'] = design_eval.get('volume_envelope')
         config_row['tau_A_max']       = metrics.get('tau_A_max')
@@ -518,19 +475,17 @@ def generate_dataset(
         if out_dir is not None and (len(pass_rows) + len(fail_rows)) >= chunk_size:
             _write_chunk(out_dir)
 
-    # Write remaining items if out_dir is provided
+    # write any remaining rows if streaming to disk
     if out_dir is not None and (pass_rows or fail_rows):
         _write_chunk(out_dir)
 
     logger.info(
-        "Pipeline complete — %d evaluated, %d passed, %d failed, %d dropped.",
+        "Pipeline complete - %d evaluated, %d passed, %d failed, %d dropped.",
         design_id, total_passed if out_dir else len(pass_rows),
         total_failed if out_dir else len(fail_rows), n_dropped,
     )
 
-    # -------------------------------------------------------------------------
-    # Build DataFrames (if not chunked to disk)
-    # -------------------------------------------------------------------------
+    ### Build DataFrames
     if out_dir is None:
         kinematics_df = _to_df(kin_rows)
         dynamics_df   = _to_df(dyn_rows)
@@ -540,21 +495,17 @@ def generate_dataset(
         passed_df     = _to_df(pass_rows)
         failed_df     = _to_df(fail_rows)
     else:
+        # when streaming to disk, internal DataFrames are empty; use total counters for summary
         empty = pd.DataFrame()
         kinematics_df = dynamics_df = stresses_df = fatigue_df = buckling_df = passed_df = failed_df = empty
 
-    # On-the-fly deduplication was already applied.
     if n_duplicates > 0:
         logger.info("Removed %d duplicate geometry design(s) (post-rounding collision).", n_duplicates)
 
-    # Note: Using out_dir implies passed_df and failed_df are empty internally. 
-    # To build the correct summary if out_dir is used, use total counts.
-    # We pass mock DFs of the correct length to _build_summary, or we just pass the count?
-    # Actually, _build_summary uses `len(passed_df)`, so let's adjust it!
     n_pass = total_passed if out_dir else len(passed_df)
     n_fail = total_failed if out_dir else len(failed_df)
     n_eval = n_pass + n_fail
-    
+
     summary = {
         'n_stage1':        n_stage1,
         'n_stage2':        n_stage2,

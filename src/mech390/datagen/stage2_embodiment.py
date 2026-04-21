@@ -6,11 +6,10 @@ Expands valid 2D mechanisms into multiple 3D variants with geometric constraints
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any, Dict, Iterable, Iterator, List
 
 import numpy as np
-
-import math
 
 from mech390 import config as config_utils
 from mech390.datagen import sampling
@@ -25,20 +24,14 @@ _CONSTRAINT_TEXT = (
     "width_l > pin_diameter_C + diametral_clearance_m + 2*min_wall"
 )
 
-# Parameters that use standard geometry resolution (resolution_mm)
+# parameters that use standard geometry resolution (resolution_mm)
 _GEO_PARAMS = {"width_r", "width_l", "thickness_r", "thickness_l"}
-# Parameters that use pin/shaft resolution (pin_resolution_mm)
+# parameters that use pin/shaft resolution (pin_resolution_mm)
 _PIN_PARAMS = {"d_shaft_A", "pin_diameter_B", "pin_diameter_C"}
 
 
+# rounds a value to the nearest manufacturing step size
 def _round_to_res(value: float, resolution_m: float) -> float:
-    """
-    Round *value* to the nearest multiple of *resolution_m*.
-    When resolution_m <= 0 no rounding is applied.
-
-    Uses Python's built-in round() to eliminate binary floating-point
-    representation noise.
-    """
     if resolution_m <= 0.0:
         return value
     decimal_places = max(0, round(-math.log10(resolution_m)))
@@ -46,22 +39,11 @@ def _round_to_res(value: float, resolution_m: float) -> float:
     return round(raw, decimal_places)
 
 
+# checks that every pin hole has enough material around it (width - pin_diameter > min_net)
 def _passes_width_pin_constraints(
     candidate: Dict[str, float],
     min_net_section: float,
 ) -> bool:
-    """
-    Enforce Stage-2 width/pin feasibility constraints.
-
-    Requires a minimum net section around every pin hole:
-        width > D_pin + delta + 2 * min_wall
-
-    which is equivalent to:
-        width - D_pin > min_net_section   (where min_net_section = delta + 2*min_wall)
-
-    This prevents degenerate geometries where the pin nearly fills the link
-    width, causing ~TPa stress values via the net-section fallback in stresses.py.
-    """
     return (
         candidate["width_r"] - candidate["d_shaft_A"]     > min_net_section
         and candidate["width_r"] - candidate["pin_diameter_B"] > min_net_section
@@ -70,13 +52,13 @@ def _passes_width_pin_constraints(
     )
 
 
+# yields up to max_attempts raw 3D parameter sets for one 2D design
 def _iter_stage2_candidates(
     method: str,
     param_ranges: Dict[str, Dict[str, float]],
     max_attempts: int,
     seed: int,
 ) -> Iterator[Dict[str, float]]:
-    """Yield at most max_attempts candidate parameter sets for one 2D design."""
     if method == "random":
         rng = np.random.default_rng(seed)
         names = sorted(param_ranges.keys())
@@ -108,9 +90,7 @@ def iter_expand_to_3d(
     valid_2d_designs: Iterable[Dict[str, float]],
     config: Dict[str, Any],
 ) -> Iterator[Dict[str, Any]]:
-    """
-    Streaming Stage-2 expansion: for each valid 2D design, emit many valid 3D variants.
-    """
+    """For each valid 2D design, yields multiple 3D variants that pass width/pin constraints."""
     param_ranges = config_utils.get_stage2_param_ranges(config)
     stage2_sampling = config_utils.get_stage2_sampling_settings(config)
     n_variants_per_2d = stage2_sampling["n_variants_per_2d"]
@@ -128,12 +108,12 @@ def iter_expand_to_3d(
 
     base_seed = int(config.get("random_seed", 42))
 
-    # Manufacturing resolutions (0 = no rounding)
+    # manufacturing resolutions (0 = no rounding)
     mfg = config.get("manufacturing") or {}
     res_m     = float(mfg.get("resolution_mm",     0.0)) * 1e-3
     pin_res_m = float(mfg.get("pin_resolution_mm", 0.0)) * 1e-3
 
-    # Net-section constraint: width - D_pin > min_net_section
+    # net-section constraint: width - D_pin > min_net_section
     # min_net_section = delta + 2 * min_wall (ensures non-zero material around every hole)
     stress_cfg   = config.get("stress_analysis") or {}
     delta_m      = float(stress_cfg.get("diametral_clearance_m", 1e-4))
@@ -150,7 +130,7 @@ def iter_expand_to_3d(
             max_attempts=max_attempts,
             seed=design_seed,
         ):
-            # --- Round to manufacturing resolution BEFORE constraint check ---
+            # round to manufacturing resolution before constraint check
             rounded: Dict[str, float] = {}
             for name, value in candidate.items():
                 if name in _PIN_PARAMS:
@@ -177,14 +157,14 @@ def iter_expand_to_3d(
         if accepted < n_variants_per_2d:
             logger.warning(
                 "Stage 2 design %d: only %d/%d variants accepted after %d attempts "
-                "(constraints: %s) — continuing with fewer variants.",
+                "(constraints: %s) - continuing with fewer variants.",
                 design_idx, accepted, n_variants_per_2d, max_attempts, _CONSTRAINT_TEXT,
             )
 
 
+# runs iter_expand_to_3d and collects all results into a list
 def expand_to_3d(
     valid_2d_designs: List[Dict[str, float]],
     config: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
-    """Compatibility wrapper that materializes the streaming Stage-2 iterator."""
     return list(iter_expand_to_3d(valid_2d_designs, config))

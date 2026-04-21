@@ -1,15 +1,12 @@
 random_seed: 42
 
 material:
-  # Material: Al 2024-T3 — all values in SI units (Pa, dimensionless)
-  rho: {min: 2780, max: 2780}  # density (kg/m³)
+  # Material: Al 2024-T3 — all values in SI units 
+  rho: {min: 2780, max: 2780}  # density (kg/m^3)
   E: 73.1e9             # Elastic modulus (Pa)
   S_ut: 483e6           # Ultimate tensile strength (Pa)
   S_y: 345e6            # Yield strength, 0.2% offset (Pa); also used as static stress limit
-  # Fatigue strength at design life (18,720,000 cycles), fully reversed (R=-1).
-  # Source: ASM data for Al 2024-T3 at 5×10^8 cycles → 138 MPa; interpolated to
-  # 18.72×10^6 cycles using Basquin S-N curve → 133 MPa. Conservative choice.
-  Sn: 133e6             # Fatigue strength at design life (18,720,000 cycles) (Pa)
+  Sn: 133e6             # fatigue strength at design life — 18,720,000 cycles (Pa)
   G: 28e9               # Shear modulus (Pa)
   nu: 0.33              # Poisson's ratio
 
@@ -22,7 +19,7 @@ geometry:
     width: 0.02                    # slider width (m)
     height: 0.02                     # slider height (m)
   widths:
-    width_r: {min: 0.001, max: 0.02}    # 1–9 mm  (tuned for ~50% pass rate with crank fatigue boundary)
+    width_r: {min: 0.001, max: 0.02}    # 1–9 mm  (tuned for around 50% pass rate with crank fatigue boundary)
     width_l: {min: 0.001, max: 0.02}
   thicknesses:
     thickness_r: {min: 0.001, max: 0.02}
@@ -40,7 +37,7 @@ operating:
   mu: 0.47                        # coefficient of friction — dry machined Al–Al (Shigley's Table 8-2)
   g: 9.81                         # gravitational acceleration (m/s²)
   ROM: 0.25                       # range of motion (m)
-  ROM_tolerance: 0.0005           # ±0.5 mm
+  ROM_tolerance: 0.0005           # +-0.5 mm
   QRR: {min: 1.5, max: 2.5}       # quick return ratio
   TotalCycles: 18720000           # 5 years of operation at 30 RPM
 
@@ -76,31 +73,23 @@ stress_analysis:
   # Used in Mott 12-24 bending moment: M = |F_A| * L_bearing.
   L_bearing: 0.010                  # 10 mm (scalar; add as design variable if needed)
 
-  # Basquin S-N constants — AA2024-T3 experimental, fully reversed (R=-1)
-  # Anchors: (10^7 cycles, 230 MPa) and (10^9 cycles, 155 MPa)
-  # b = log10(155/230) / log10(1e9/1e7) = -0.086
-  # A = 230 / (1e7)^(-0.086) = 924 MPa
-  # Valid range: 10^5 to 10^9 cycles
-  basquin_A: 924e6              # Basquin intercept A (Pa)
-  basquin_b: -0.086             # Basquin slope b (dimensionless)
+  # Basquin S-N constants for AA2024-T3, fully reversed (R=-1), valid 10^5–10^9 cycles
+  basquin_A: 924e6              # intercept A (Pa)
+  basquin_b: -0.086             # slope b (dimensionless)
 
-  # Fatigue strength correction factors (Mott Ch. 5):
-  # S'n = Sn * C_sur * C_s * C_st * C_R * C_m * C_f
-  # C_sur: manufacturing / surface condition factor (Mott Table 5-4)
-  #        as-machined, Al 2024-T3, S_ut=483 MPa → 4.51*483^(-0.265) ≈ 0.88
-  # C_s:   size factor — computed from equivalent diameter in fatigue.py (Mott Table 5-3)
-  C_sur: 0.88           # manufacturing method factor: as-machined (Mott Table 5-4)
-  C_st: 1.0             # stress type / load factor
-  C_R: 0.81             # reliability factor (≈ 99%, Mott Table 5-3)
-  C_f: 1.0              # miscellaneous / environment factor
-  C_m: 1.0              # material factor (wrought Al, no special treatment)
+  # fatigue strength correction factors — S'n = Sn * C_sur * C_s * C_st * C_R * C_m * C_f
+  C_sur: 0.88           # surface condition — as-machined (Mott Table 5-4)
+  C_st: 1.0             # load type
+  C_R: 0.81             # reliability (~99%, Mott Table 5-3)
+  C_f: 1.0              # environment
+  C_m: 1.0              # material
 
 manufacturing:
   resolution_mm: 1.0              # r, l, e, widths, thicknesses rounded to nearest mm
   pin_resolution_mm: 0.1          # pin diameters rounded to nearest 0.1 mm
 
 limits:
-  safety_factor: 1.0               # de-rating divisor applied to material yield limits. This applies to static.
+  safety_factor: 1.0               # de-rating divisor on yield limits (static)
   utilization_max: 1.0             # utilization = max(sigma_max/sigma_limit, tau_max/tau_limit)
   n_static_min: 1.0                # shared minimum static FoS (used as fallback for per-component values)
   n_static_rod_min: 1.0            # minimum static FoS — rod

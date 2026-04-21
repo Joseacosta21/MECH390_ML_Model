@@ -1,28 +1,7 @@
-# ---------------------------------------------------------------------------
-# Surrogate Optimizer — weight table and optimizer settings
-# ---------------------------------------------------------------------------
-#
-# HOW TO USE
-# ----------
-# 1. Edit the weights below to reflect your design priority.
-#    They should sum to 1.0.  direction: minimize → lower is better;
-#    direction: maximize → higher is better.
-#
-# 2. Run:
-#      python scripts/optimize_design.py \
-#          --generate-config configs/generate/baseline.yaml \
-#          --optimize-config configs/optimize/search.yaml \
-#          --model data/models/surrogate_best.pt
-#
-# Geometry bounds are read directly from --generate-config (baseline.yaml),
-# so any change to the bounds there is automatically picked up here.
-# ---------------------------------------------------------------------------
-
 objectives:
   min_n_fatigue:
     weight:    0.30
-    direction: maximize       # highest-weight: fatigue FoS is the binding constraint
-                              # at 18.72M cycles; surrogate now predicts min(n_rod, n_crank, n_pin)
+    direction: maximize       # min fatigue FoS across rod, crank, pin
 
   volume_envelope:
     weight:    0.30
@@ -40,49 +19,24 @@ objectives:
     weight:    0.10
     direction: minimize       # lighter mechanism → cheaper to 3D print
 
-  # min_n_static removed (ML-P3): all passing designs already satisfy the static
-  # FOS floor enforced by generate.py; maximising it further does not improve
-  # structural safety and can steer the optimizer toward fatigue-failing designs
-  # that happen to have paradoxically high static FOS (different failure mode).
-
 constraints:
   pass_fail_prob_min: 0.95    # reject geometries with predicted pass probability < 95%
 
-  # Penalty scaling factors for each hard constraint violation.
-  # These multiply the raw violation magnitude before subtracting from score.
-  # net_section violation is in metres → needs large scale to be competitive with score.
-  # kinematic violation is in metres → moderate scale.
-  # buckling violation is dimensionless (FoS deficit) → no scaling needed.
-  penalty_net_section_scale: 1000.0
-  penalty_kinematic_scale:   100.0
-  penalty_buckling_scale:    1.0
+  # penalty scales — multiply raw violation before subtracting from score
+  penalty_net_section_scale: 1000.0   # net section (metres)
+  penalty_kinematic_scale:   100.0    # kinematic feasibility (metres)
+  penalty_buckling_scale:    1.0      # buckling FoS deficit (dimensionless)
 
-  # Out-of-distribution (OOD) penalty.
-  # When a surrogate regression prediction falls outside the training data range,
-  # the optimizer previously treated it as a free maximum score (silent clip to [0,1]).
-  # These parameters penalise designs whose predictions extrapolate beyond the
-  # training distribution, discouraging the optimizer from exploiting OOD regions.
-  #
-  # ood_tolerance:    Fractional grace band beyond [0, 1] before penalty applies.
-  #                   0.1 = 10% of the training range is allowed before penalising.
-  # ood_penalty_scale: Per-unit penalty multiplier, scaled by objective weight.
-  #                   10.0 means a full-weight (w=1.0) objective that extrapolates
-  #                   1 full training-range beyond the band loses 10× its weight
-  #                   from the score — effectively eliminating that candidate.
+  # penalise predictions outside training range to avoid OOD exploitation
+  # ood_tolerance: grace band (fraction of training range) before penalty kicks in
+  # ood_penalty_scale: multiplier per unit of excess, scaled by objective weight
   ood_tolerance:     0.1
   ood_penalty_scale: 10.0
 
-  # ROM (stroke) constraint.
-  # All training data satisfies ROM = 250 mm ± 0.5 mm.  Without this penalty the
-  # optimizer can freely pick r values that produce wildly different strokes while
-  # still getting high surrogate pass_prob (the model learned structural pass/fail,
-  # not kinematics).  Violation = |ROM_actual - ROM_target| - ROM_tolerance (metres).
-  # penalty * violation_m * scale → at 50 mm error: 10 * 0.05 * 200 = 100 >> max_score.
+  # keep stroke at 250 mm +- 0.5 mm — surrogate only learned structure, not kinematics
   penalty_rom_scale:  200.0
 
-  # QRR (quick-return ratio) constraint.
-  # All training data satisfies QRR ∈ [1.5, 2.5].  Violation = excess outside band
-  # (dimensionless).  penalty * violation * scale → at 0.5 excess: 10 * 0.5 * 20 = 100.
+  # keep QRR in [1.5, 2.5] — same reason as ROM
   penalty_qrr_scale:  20.0
 
 optimizer:

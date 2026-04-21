@@ -1,28 +1,10 @@
 """
-preview_forces.py
------------------
-Runs Stage 1 → Stage 2 → mass properties → dynamics sweep for every valid
-3D design and writes one row per (design, crank angle) to a CSV file.
+preview_forces.py - Stage 1 -> Stage 2 -> dynamics sweep, one row per (design, crank angle).
 
-Each row contains:
-  - Design identity: design_index, r, l, e
-  - Crank angle: theta_deg, theta_rad
-  - Joint reactions: F_Ax, F_Ay, F_Bx, F_By, F_Cx, F_Cy  [N]
-  - Slider guide: N [N], F_f [N]
-  - Drive torque: tau_A  [N·m]
-
-Usage
------
-  python scripts/preview_forces.py
-
-  python scripts/preview_forces.py \\
-      --config  configs/generate/baseline.yaml \\
-      --seed    42 \\
-      --out-dir data/preview \\
-      --max-2d  20
+Output: data/preview/forces_sweep.csv
+Usage:  python scripts/preview_forces.py
 """
 
-import argparse
 import csv
 import logging
 import sys
@@ -34,13 +16,13 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from mech390.config import load_config, get_baseline_config
+from mech390.config import get_baseline_config
 from mech390.datagen import stage1_kinematic, stage2_embodiment
 from mech390.physics import dynamics, mass_properties as mp
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
+    format="%(asctime)s  %(levelname)-8s  %(name)s - %(message)s",
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("preview_forces")
@@ -63,36 +45,10 @@ THETA_STEP_DEG = 15
 THETAS_DEG = list(range(0, 360, THETA_STEP_DEG))
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="preview_forces",
-        description=(
-            "Run Stage 1 → Stage 2 → mass properties → dynamics sweep and "
-            "export one row per (design, crank angle) to a CSV file."
-        ),
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    parser.add_argument("--config", metavar="PATH", default=None)
-    parser.add_argument("--seed", metavar="INT", type=int, default=None)
-    parser.add_argument("--out-dir", metavar="PATH", default=str(DEFAULT_OUT_DIR))
-    parser.add_argument(
-        "--max-2d", metavar="INT", type=int, default=None,
-        help="Cap number of Stage-1 designs forwarded to Stage 2."
-    )
-    return parser
-
-
-def run(config_path, seed, out_dir: Path, max_2d):
-    # ---- Load config --------------------------------------------------------
-    if config_path is not None:
-        logger.info("Loading config from: %s", config_path)
-        config = load_config(config_path)
-    else:
-        logger.info("Loading default baseline config.")
-        config = get_baseline_config()
-
-    if seed is not None:
-        config["random_seed"] = seed
+def run():
+    config = get_baseline_config()
+    out_dir = DEFAULT_OUT_DIR
+    max_2d = None
 
     operating = config.get("operating", {})
     rpm     = float(operating.get("RPM", 30))
@@ -102,12 +58,12 @@ def run(config_path, seed, out_dir: Path, max_2d):
 
     logger.info("omega = %.4f rad/s  (RPM=%.1f)  mu=%.3f", omega, rpm, mu)
 
-    # ---- Stage 1 ------------------------------------------------------------
-    logger.info("Stage 1: kinematic synthesis …")
+    ### Stage 1
+    logger.info("Stage 1: kinematic synthesis ...")
     t0 = time.perf_counter()
     valid_2d = list(stage1_kinematic.iter_valid_2d_mechanisms(config))
     n_stage1 = len(valid_2d)
-    logger.info("Stage 1 done in %.2f s — %d valid 2D designs.", time.perf_counter() - t0, n_stage1)
+    logger.info("Stage 1 done in %.2f s - %d valid 2D designs.", time.perf_counter() - t0, n_stage1)
 
     if n_stage1 == 0:
         logger.error("No valid 2D designs. Check config bounds.")
@@ -116,7 +72,7 @@ def run(config_path, seed, out_dir: Path, max_2d):
     designs_for_stage2 = valid_2d[:max_2d] if max_2d is not None else valid_2d
     n_forwarded = len(designs_for_stage2)
 
-    # ---- Stage 2 + dynamics sweep ------------------------------------------
+    ### Stage 2 + dynamics sweep
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / OUTPUT_FILENAME
 
@@ -132,7 +88,6 @@ def run(config_path, seed, out_dir: Path, max_2d):
         for design_3d in stage2_embodiment.iter_expand_to_3d(designs_for_stage2, config):
             n_designs += 1
 
-            # Compute mass properties for this design.
             try:
                 mass_props = mp.compute_design_mass_properties(design_3d, config)
             except Exception as exc:
@@ -177,7 +132,7 @@ def run(config_path, seed, out_dir: Path, max_2d):
                     n_dyn_ok += 1
                 except Exception as exc:
                     logger.debug(
-                        "Dynamics failed — design #%d theta=%d°: %s",
+                        "Dynamics failed - design #%d theta=%d deg: %s",
                         n_designs, theta_deg, exc
                     )
                     n_dyn_err += 1
@@ -185,7 +140,7 @@ def run(config_path, seed, out_dir: Path, max_2d):
     elapsed = time.perf_counter() - t0
 
     print("\n" + "=" * 64)
-    print("  Forces Preview — Summary")
+    print("  Forces Preview - Summary")
     print("=" * 64)
     print(f"  Stage-1 valid designs  : {n_stage1:>10,}")
     print(f"  Forwarded to Stage 2   : {n_forwarded:>10,}")
@@ -198,10 +153,10 @@ def run(config_path, seed, out_dir: Path, max_2d):
     print("=" * 64)
 
     if n_rows == 0:
-        logger.error("No rows written — check config and dynamics setup.")
+        logger.error("No rows written - check config and dynamics setup.")
         sys.exit(1)
 
-    # ---- Quick stats --------------------------------------------------------
+    ### Quick stats
     import pandas as pd
     df = pd.read_csv(out_path)
     print("\nDescriptive statistics (force columns):\n")
@@ -211,16 +166,8 @@ def run(config_path, seed, out_dir: Path, max_2d):
 
 
 def main():
-    parser  = _build_parser()
-    args    = parser.parse_args()
-    out_dir = Path(args.out_dir).resolve()
     try:
-        run(
-            config_path=args.config,
-            seed=args.seed,
-            out_dir=out_dir,
-            max_2d=args.max_2d,
-        )
+        run()
     except FileNotFoundError as exc:
         logger.error("Config file not found: %s", exc)
         sys.exit(2)
