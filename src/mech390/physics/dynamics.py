@@ -1,5 +1,5 @@
 """
-Dynamics module for Offset Crank-Slider Mechanism.
+Dynamics for the offset crank-slider mechanism.
 Implements Newton-Euler equations for joint reaction forces.
 
 All force/position vectors are np.ndarray of shape (2,) representing [x, y].
@@ -48,13 +48,11 @@ def solve_joint_reactions_newton_euler(
     """
     Solve the planar Newton-Euler joint-reaction system at one crank angle.
 
-    Unknown vector:
-        [F_Ax, F_Ay, F_Bx, F_By, F_Cx, F_Cy, N, tau_A]
+    Unknown vector: [F_Ax, F_Ay, F_Bx, F_By, F_Cx, F_Cy, N, tau_A].
 
-    m_block: mass of the payload block sitting on the slider (kg).
-        Volumeless — adds to slider inertia (eq 7) and weight (eq 8) only.
-        N is solved by the system, so increased weight automatically raises
-        friction via mu*N without any extra terms.
+    m_block is the payload mass sitting on the slider. It adds to slider
+    inertia and weight only - N is solved by the system, so increased
+    weight automatically raises friction via mu*N.
     """
     m_r = float(mass_crank)
     m_l = float(mass_rod)
@@ -66,15 +64,13 @@ def solve_joint_reactions_newton_euler(
     grav = float(g)
     alpha_crank = float(alpha_r)
 
-    # Kinematics used by the force balance model.
+    # kinematics used by the force balance model
     r_A = np.array([0.0, 0.0], dtype=float)
     r_B = kinematics.crank_pin_position(theta, r)
     r_C = kinematics.slider_position(theta, r, l, e)
 
     r_Gr = mass_properties.crank_cog(theta, r)
     r_Gl = mass_properties.rod_cog(theta, r, l, e)
-    # Retained for upcoming slider moment formulations (future extension hook).
-    r_Gs = mass_properties.slider_cog(theta, r, l, e)
 
     a_B = kinematics.crank_pin_acceleration(theta, omega, r)
     a_C = kinematics.slider_acceleration(theta, omega, r, l, e)
@@ -91,7 +87,7 @@ def solve_joint_reactions_newton_euler(
     r_B_Gl = r_B - r_Gl
     r_C_Gl = r_C - r_Gl
 
-    # Unknown vector indices.
+    # unknown vector indices
     f_ax, f_ay, f_bx, f_by, f_cx, f_cy, n_idx, tau_idx = range(8)
 
     A = np.zeros((8, 8), dtype=float)
@@ -140,7 +136,7 @@ def solve_joint_reactions_newton_euler(
     b[6] = m_eff * a_Gs[0]
 
     # 8) Slider Fy: -F_Cy + N = m_eff * a_Gsy + m_eff * g
-    #    Larger m_eff → larger N → larger friction in eq 7 (coupled automatically).
+    #    Larger m_eff -> larger N -> larger friction in eq 7 (coupled automatically).
     A[7, f_cy] = -1.0
     A[7, n_idx] = 1.0
     b[7] = m_eff * a_Gs[1] + m_eff * grav
@@ -177,6 +173,7 @@ def solve_joint_reactions_newton_euler(
     }
 
 
+# thin wrapper - positional args unchanged, optional kwargs passed through
 def joint_reaction_forces(
     theta: float,
     omega: float,
@@ -188,18 +185,7 @@ def joint_reaction_forces(
     mass_slider: float,
     **kwargs: Any,
 ) -> Dict[str, Any]:
-    """
-    Backward-compatible wrapper for dynamics callers.
-
-    Positional parameters are unchanged from the original contract.
-    Optional keyword parameters:
-      - I_crank (default 1.0)
-      - I_rod (default 1.0)
-      - mu (default 0.0)
-      - g (default 9.81)
-      - alpha_r (default 0.0)
-      - v_eps (default 1e-9)
-    """
+    """Calls solve_joint_reactions_newton_euler with positional args plus any kwargs."""
     return solve_joint_reactions_newton_euler(
         theta=theta,
         omega=omega,

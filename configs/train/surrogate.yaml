@@ -1,10 +1,3 @@
-# ---------------------------------------------------------------------------
-# Surrogate model training configuration
-# ---------------------------------------------------------------------------
-# This config controls: data paths, feature/target lists, architecture search
-# space, training hyperparameters, and Optuna sweep settings.
-# ---------------------------------------------------------------------------
-
 data:
   csv_pass: data/preview/passed_configs.csv
   csv_fail: data/preview/failed_configs.csv
@@ -38,9 +31,6 @@ features:
     - n_buck
     - n_shaft
 
-# ---------------------------------------------------------------------------
-# Hyperparameter search space (Optuna samples from these ranges)
-# ---------------------------------------------------------------------------
 model:
   hidden_sizes_options:         # discrete architecture choices (expanded for 10k-row dataset)
     - [64, 64]
@@ -52,7 +42,7 @@ model:
     - [1024, 512, 256, 128]
     - [1024, 512, 256, 128, 64]
   dropout_range: [0.0, 0.3]     # uniform range
-  use_batch_norm: true          # fixed — always on
+  use_batch_norm: true          # fixed ,always on
 
 training:
   lr_range:           [1.0e-4, 1.0e-2]   # log-uniform
@@ -66,23 +56,17 @@ optuna:
   metric:    val_f1    # primary metric to maximise (classifier head)
   direction: maximize
 
-# Loss weighting between classification (BCE) and regression (MSE) heads.
-# Increase bce_weight to prioritise pass/fail accuracy over regression quality.
+# bump bce to prioritise pass/fail over regression
 loss_weights:
   bce: 1.0
   mse: 0.5
 
-# Learning rate schedule applied during training.
-# type: cosine_annealing — CosineAnnealingLR, steps once per epoch.
-# T_max: number of epochs for one cosine half-cycle (set ~= max_epochs / 2).
-# eta_min: minimum LR at the trough of the cosine.
-# Set type to anything else (or omit) to disable scheduling.
+# cosine annealing — T_max ~= max_epochs / 2, set type to anything else to disable
 lr_schedule:
   type:    cosine_annealing
   T_max:   150
   eta_min: 1.0e-6
 
-# Where to save the best checkpoint and scaler
 output:
   model_dir:      data/models
   checkpoint:     data/models/surrogate_best.pt

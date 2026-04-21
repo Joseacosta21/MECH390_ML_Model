@@ -1,19 +1,17 @@
 """
 Inference wrapper for the trained CrankSliderSurrogate.
 
-Loads a checkpoint + scaler and exposes a simple predict() function that
-accepts either a single design dict or a DataFrame and returns predictions
-for all targets.
+Loads a checkpoint + scaler and exposes a predict() method that accepts
+a single design dict, a list of dicts, or a DataFrame, and returns
+pass probability and all regression targets.
 
-Usage
------
+Usage:
     from mech390.ml.infer import SurrogatePredictor
 
     predictor = SurrogatePredictor(
         checkpoint  = 'data/models/surrogate_best.pt',
         scaler_path = 'data/models/scaler.pkl',
     )
-
     result = predictor.predict({
         'r': 0.08, 'l': 0.22, 'e': 0.05,
         'width_r': 0.012, 'thickness_r': 0.008,
@@ -39,15 +37,9 @@ from mech390.ml.models import (
 
 
 class SurrogatePredictor:
-    """
-    Thin wrapper around a loaded CrankSliderSurrogate checkpoint.
+    """Loads a trained surrogate checkpoint and runs predictions on new designs."""
 
-    Args:
-        checkpoint:  Path to surrogate_best.pt
-        scaler_path: Path to scaler.pkl
-        device:      'cpu' or 'cuda' (default 'cpu')
-    """
-
+    # loads checkpoint, validates version, checks regression target count, loads scaler
     def __init__(
         self,
         checkpoint:  str,
@@ -78,18 +70,10 @@ class SurrogatePredictor:
         self,
         design: Union[Dict[str, float], pd.DataFrame, List[Dict[str, float]]],
     ) -> Union[Dict[str, Any], pd.DataFrame]:
-        """
-        Predict pass probability and all regression targets.
+        """Runs the surrogate on one or many designs and returns pass_prob and all regression targets.
 
-        Args:
-            design: A single design dict, a list of dicts, or a DataFrame.
-                    Must contain all 10 INPUT_FEATURES keys.
-
-        Returns:
-            - If input is a single dict: returns a dict with keys
-              'pass_prob', 'pass_fail_pred', and all REGRESSION_TARGETS.
-            - If input is a list or DataFrame: returns a DataFrame with
-              one row per design.
+        Input can be a single dict, a list of dicts, or a DataFrame with 10 geometry columns.
+        Returns a dict for a single input or a DataFrame for multiple inputs.
         """
         single = isinstance(design, dict)
         if single:
@@ -100,7 +84,7 @@ class SurrogatePredictor:
         else:
             df = design.copy()
 
-        # Derive slenderness features before checking for INPUT_FEATURES presence
+        # add slenderness features before checking for column presence
         df = F.derive_input_features(df)
 
         missing = [c for c in F.INPUT_FEATURES if c not in df.columns]
@@ -114,10 +98,10 @@ class SurrogatePredictor:
             logit, pred_reg = self.model(x_t)
             pass_probs = torch.sigmoid(logit).cpu().numpy().ravel()
 
-        # Model outputs are normalised [0,1] — denormalise to physical units
+        # model outputs are in [0, 1] - denormalise to physical units
         reg_vals = F.denormalize_targets(
             pred_reg.cpu().numpy(), self.target_stats
-        )  # (N, len(REGRESSION_TARGETS)) in physical units
+        )
 
         results = []
         for i in range(len(df)):
