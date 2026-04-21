@@ -8,7 +8,6 @@ __pycache__/
 *.csv
 data/runs/
 data/preview/
-data/models/
 data/results/
 !data/models/surrogate_best.pt
 
